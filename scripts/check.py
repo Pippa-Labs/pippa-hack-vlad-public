@@ -14,14 +14,21 @@ whether your app will ever be *chosen* — that is `scripts/routing_check.py`,
 which is advice rather than a gate, because a weak example phrase is a bad app
 rather than an invalid one and blocking a push for it would help nobody.
 
-**One WARNING, and it is deliberately not a gate.** A missing or placeholder
-`owner_email` does not stop anything: the app registers either way, and when
-an organiser has review switched off it does not matter at all — so failing
-the build for it would refuse a push the platform is perfectly happy with.
-What it does instead is publish an app that belongs to nobody, and an app that
-belongs to nobody is invisible to everybody, its builder included. That is the
-one failure on this page that produces no error message anywhere, so it gets
-the loudest thing short of a gate: a warning, printed twice.
+**WARNINGS, and they are deliberately not gates.** Who owns your app is not in
+this repository at all: Pippa Labs created the repository for your Pippa
+account, and Pippa knows which repository a push came from. What IS in here is
+public: `app_author_name`, the name shown with your app, and anything else you
+commit. The rules for those — a valid author name, no `owner_email`, no email
+address in any file or on any commit — are enforced by Pippa and by the build
+itself, which refuse the push. This file is a copy that lives in your
+repository and is never updated, so a gate here could go on refusing pushes
+long after Pippa had changed its mind. It warns instead, early, so that a
+refusal is never the first you hear of it. Each warning is printed twice,
+because the test output in between is long enough to hide it.
+
+It never prints an email address it finds, only its first letter and its
+domain (`s***@college.example`): the build log is as readable as the
+repository.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 # Windows consoles still default to a legacy code page on many machines, and
@@ -94,19 +102,26 @@ def warn(message: str, fix: str = "") -> None:
         print(f"       {line}".rstrip(), flush=True)
 
 
+def git(*args: str) -> str:
+    """One git command's output, or "" if git is missing or the command fails."""
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, timeout=10,
+        )
+    except Exception:
+        return ""
+    if done.returncode != 0:
+        return ""
+    return done.stdout.decode("utf-8", errors="replace")
+
+
 def repo_name() -> str | None:
     """This repository's name on GitHub.
 
     Taken from the git remote rather than the folder, because the folder can
     be renamed on your machine and the publisher only ever sees the remote.
     """
-    try:
-        url = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=ROOT, capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-    except Exception:
-        return None
+    url = git("remote", "get-url", "origin").strip()
     match = re.search(r"/([^/]+?)(?:\.git)?$", url)
     return match.group(1) if match else None
 
@@ -115,51 +130,298 @@ def expected_app_id(repo: str) -> str:
     return "hack." + repo[len(REPO_PREFIX):].replace("-", "_")
 
 
-def owner_email(manifest_data) -> str:
-    """`owner_email` out of the manifest — top level, or inside `app`.
+# ── The public author name ───────────────────────────────────────────────────
+#
+# The rules Pippa applies when it registers your app, applied the same way:
+# the same order, and one sentence, for the first rule broken. The sentences
+# are the ones Pippa refuses the push with, so a warning here reads exactly
+# like the refusal it saves you from.
 
-    Both places, because the service that registers your app reads both and
-    somebody will always write the one the guide does not show. Keeping the
-    two readers identical means a manifest that looks owned here is owned
-    there.
+AUTHOR_NAME_KEY = "app_author_name"
+AUTHOR_NAME_MIN, AUTHOR_NAME_MAX = 3, 30
+#: Words an author name may not contain, in any capitals: each one makes an app
+#: look as if Pippa itself vouches for it. The same rule as for `app.name`.
+RESERVED_WORDS = ("pippa", "official", "verified")
 
-    It reads the raw YAML rather than the validated `Manifest`, and that is
-    not laziness: the SDK keeps only the fields it knows about, and this is
-    not one of them. It is read at registration, not at validation, so it
-    never reaches the parsed object.
+AUTHOR_NAME_NOT_TEXT = "app_author_name must be text: put the name in quotes."
+AUTHOR_NAME_LENGTH = "app_author_name must be 3 to 30 characters."
+AUTHOR_NAME_CHARACTERS = (
+    "app_author_name can only use letters, numbers, spaces, dots, hyphens and "
+    "underscores."
+)
+AUTHOR_NAME_START = "app_author_name must start with a letter or a number."
+AUTHOR_NAME_ADDRESS = "app_author_name must not be an email address or a web address."
+AUTHOR_NAME_RESERVED = 'app_author_name can\'t contain "pippa", "official" or "verified".'
+#: Pippa's warning for a manifest written before `app_author_name` existed.
+ADD_AUTHOR_NAME = (
+    "Add app_author_name to manifest.yaml: the public name shown with your "
+    "app. Until then it shows `publisher`."
+)
+
+
+def normalise_author_name(value: str) -> str:
+    """Trimmed, with every run of spaces inside collapsed to one."""
+    return " ".join((value or "").split())
+
+
+def _folded(value: str) -> str:
+    # What the address and reserved-word rules compare: a full-width
+    # "ｐｉｐｐａ" is still "pippa".
+    return unicodedata.normalize("NFKC", normalise_author_name(value)).casefold()
+
+
+def _allowed_in_name(character: str) -> bool:
+    # A letter of any alphabet with the marks some alphabets need to spell a
+    # name at all (`str.isalnum` alone refuses half a Hindi name), a decimal
+    # digit, a space, `.`, `_` or `-`. Invisible characters are refused.
+    category = unicodedata.category(character)
+    return category[0] in ("L", "M") or category == "Nd" or character in " ._-"
+
+
+def _starts_a_name(character: str) -> bool:
+    category = unicodedata.category(character)
+    return category[0] == "L" or category == "Nd"
+
+
+def author_name_problem(value) -> str | None:
+    """Why `value` is not an acceptable `app_author_name`, or None.
+
+    The first rule it breaks, in the order that gives the most useful answer:
+    "me@example.com" is told it is an address, not that `@` is an unusual
+    character. No attempt at telling a real name from an invented one,
+    because nothing can. That is why Claude asks for a pseudonym.
+    """
+    if not isinstance(value, str):
+        return AUTHOR_NAME_NOT_TEXT
+    name = normalise_author_name(value)
+    folded = _folded(name)
+    if "@" in folded or "://" in folded or "www." in folded:
+        return AUTHOR_NAME_ADDRESS
+    if any(word in folded for word in RESERVED_WORDS):
+        return AUTHOR_NAME_RESERVED
+    if not AUTHOR_NAME_MIN <= len(name) <= AUTHOR_NAME_MAX:
+        return AUTHOR_NAME_LENGTH
+    if not all(_allowed_in_name(c) for c in name):
+        return AUTHOR_NAME_CHARACTERS
+    if not _starts_a_name(name[0]):
+        return AUTHOR_NAME_START
+    return None
+
+
+def author_name_unset(manifest_data) -> bool:
+    """Whether `app_author_name` is there but empty, as the template ships it.
+
+    The build publishes nothing in that state ("Nothing to publish yet").
+    """
+    if not isinstance(manifest_data, dict) or AUTHOR_NAME_KEY not in manifest_data:
+        return False
+    value = manifest_data[AUTHOR_NAME_KEY]
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def legacy_publisher(manifest_data) -> str:
+    """`app.publisher`, from manifests written before `app_author_name`."""
+    if not isinstance(manifest_data, dict) or not isinstance(manifest_data.get("app"), dict):
+        return ""
+    value = manifest_data["app"].get("publisher")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def owner_email_present(manifest_data) -> bool:
+    """Whether an old `owner_email` line still names somebody, at the top or
+    in `app`.
+
+    Ownership no longer comes from this file. Pippa refuses the line in a
+    public repository and ignores it in a private one. An empty one names
+    nobody, so it counts as gone, as it does for Pippa.
     """
     if not isinstance(manifest_data, dict):
-        return ""
+        return False
     for holder in (manifest_data, manifest_data.get("app")):
-        if isinstance(holder, dict):
-            value = holder.get("owner_email")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return ""
+        if isinstance(holder, dict) and "owner_email" in holder:
+            value = holder["owner_email"]
+            if not (value is None or (isinstance(value, str) and not value.strip())):
+                return True
+    return False
 
 
-#: Domains reserved for documentation (RFC 2606). They cannot belong to a real
-#: person, so an address at one of them is a field nobody has filled in rather
-#: than an address — which is exactly what the template ships.
-PLACEHOLDER_DOMAINS = ("example.com", "example.org", "example.net")
+# ── Email addresses ──────────────────────────────────────────────────────────
+
+#: An email address, as this file and `.githooks/pre-commit` find one. The
+#: patterns here are the hook's, character for character, so the hook refuses
+#: exactly the lines this file warns about (scripts/test_pre_commit.py
+#: compares the hook's copies). The build's own scan is a separate program
+#: with a pattern of its own: it allows the same domains and skips the same
+#: file names (FILE_SUFFIXES), so on ordinary text the three agree. On a
+#: made-up string they can differ, and then the build is the one that counts.
+#: Stricter than "anything round an @" on purpose: `mermaid@11/dist/...` in
+#: docs/builder-guide.html, a font address's `wght@400` and Python's
+#: `@pytest.mark.network` are not addresses.
+EMAIL_PATTERN = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+#: Addresses that cannot belong to anybody: GitHub's no-reply addresses, and
+#: the domains reserved for examples and tests (RFC 2606). Matched against an
+#: address found by EMAIL_PATTERN, ignoring capitals.
+ALLOWED_PATTERN = (
+    r"@(users\.noreply\.github\.com"
+    r"|([A-Za-z0-9-]+\.)*example\.(com|org|net)"
+    r"|([A-Za-z0-9-]+\.)*(example|test|invalid|localhost))$"
+)
+#: File names that EMAIL_PATTERN mistakes for an address: a picture drawn at
+#: twice the size is `logo@2x.png`, a library is `lib@1.2.3.min.js`. A match
+#: whose last part is one of these is a file name, as it is for the build,
+#: whose list this is.
+FILE_SUFFIXES = (
+    "avif", "bmp", "cjs", "css", "csv", "gif", "heic", "htm", "html", "ico",
+    "jpeg", "jpg", "js", "json", "jsx", "lock", "map", "mjs", "png", "scss",
+    "svg", "tif", "tiff", "toml", "ts", "tsx", "txt", "webp", "whl", "xml",
+    "yaml", "yml",
+)
+#: FILE_SUFFIXES as the hook matches them, ignoring capitals.
+FILE_SUFFIX_PATTERN = r"\.(" + "|".join(FILE_SUFFIXES) + r")$"
+#: Pippa's own test for an address in `manifest.yaml`, which is looser than
+#: EMAIL_PATTERN and has no allowed domains: everything in the manifest is
+#: shown to people, so even an example address does not belong there.
+MANIFEST_EMAIL_PATTERN = r"[^\s@]+@[^\s@]+\.[^\s@]+"
+#: The addresses a commit may carry, ignoring capitals: a GitHub no-reply
+#: address, or GitHub's own `noreply` address at `github.com`, which GitHub
+#: puts on the edits made on its website. The build accepts the same two.
+#: (The second is not written out whole anywhere in this repository: it is not
+#: at an allowed domain, so the build would refuse the file.)
+NOREPLY_PATTERN = r"^([^@]+@users\.noreply\.github\.com|noreply@github\.com)$"
+#: Files larger than this are skipped by the scan, as the build skips them.
+SCAN_LIMIT_BYTES = 1024 * 1024
+
+_EMAIL = re.compile(EMAIL_PATTERN)
+_ALLOWED = re.compile(ALLOWED_PATTERN, re.IGNORECASE)
+_FILE_SUFFIX = re.compile(FILE_SUFFIX_PATTERN, re.IGNORECASE)
+_MANIFEST_EMAIL = re.compile(MANIFEST_EMAIL_PATTERN)
+_NOREPLY = re.compile(NOREPLY_PATTERN, re.IGNORECASE)
 
 
-def owner_problem(manifest_data) -> str:
-    """What is wrong with this manifest's owner, or "" if nothing is.
+def mask(address: str) -> str:
+    """`s***@college.example`: enough to recognise your own, not to copy it."""
+    local, _, domain = address.partition("@")
+    return f"{local[:1]}***@{domain}"
 
-    A string rather than a bool so the warning can say which of the three
-    things happened. "It is missing" and "it is still the placeholder" send
-    you to the same line of the same file, but being told the wrong one is
-    how you end up reading the right line and not seeing anything wrong.
+
+def is_allowed_address(address: str) -> bool:
+    return bool(_ALLOWED.search(address))
+
+
+def is_file_name(address: str) -> bool:
+    """Whether a match is really a file name, such as `logo@2x.png`."""
+    return bool(_FILE_SUFFIX.search(address))
+
+
+def addresses_in(text: str) -> list[tuple[int, str]]:
+    """(line number, address) for every address in `text` that is not allowed."""
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        for match in _EMAIL.finditer(line):
+            address = match.group(0)
+            if not (is_allowed_address(address) or is_file_name(address)):
+                found.append((number, address))
+    return found
+
+
+def manifest_address_paths(manifest_data) -> list[str]:
+    """Where in the manifest there is an email address, as Pippa names the
+    place: `app.summary`, `outcomes[0].example_phrases[2]`.
+
+    Every string at any depth, keys of mappings as well as values, by Pippa's
+    own looser test. A key that is itself an address is named by where it is
+    (its parent, or "the top level"), so the address is never repeated.
+    `owner_email` is left out: it has a warning of its own. Pippa stops at the
+    first place; this lists them all, so they can be fixed in one go.
     """
-    value = owner_email(manifest_data)
-    if not value:
-        return "manifest.yaml does not say who owns this app (owner_email)"
-    if value.count("@") != 1 or value.startswith("@") or value.endswith("@"):
-        return f"owner_email is {value!r}, which is not an email address"
-    if value.rsplit("@", 1)[1].lower().strip(" .") in PLACEHOLDER_DOMAINS:
-        return f"owner_email is still the template's placeholder ({value})"
-    return ""
+    found: list[str] = []
+
+    def walk(value, path: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(key, str) and _MANIFEST_EMAIL.search(key):
+                    found.append(path or "the top level")
+                    continue
+                if key == "owner_email" and path in ("", "app"):
+                    continue
+                walk(item, f"{path}.{key}" if path else str(key))
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+        elif isinstance(value, str) and _MANIFEST_EMAIL.search(value):
+            found.append(path or "the top level")
+
+    walk(manifest_data, "")
+    return list(dict.fromkeys(found))
+
+
+def tracked_files() -> list[str]:
+    """The files git tracks here: the ones a push publishes."""
+    return [name for name in git("ls-files", "-z").split("\0") if name]
+
+
+def scan_files(root: Path, names: list[str]) -> list[tuple[str, int, str]]:
+    """(file, line, masked address) for every address in these files.
+
+    Binary files and files over a megabyte are skipped, as the build skips
+    them.
+    """
+    found = []
+    for name in names:
+        path = root / name
+        try:
+            if not path.is_file() or path.stat().st_size > SCAN_LIMIT_BYTES:
+                continue
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if b"\0" in data[:8192]:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for number, address in addresses_in(text):
+            found.append((name, number, mask(address)))
+    return found
+
+
+def identity_email(ident: str) -> str:
+    """The address out of git's `Name <address> 1700000000 +0000`."""
+    match = re.search(r"<([^>]*)>", ident)
+    return match.group(1).strip() if match else ""
+
+
+def commit_emails() -> dict[str, str]:
+    """The addresses on the commit: author and committer.
+
+    In the build, the commit that was pushed. Here, the next commit you make,
+    which is the one worth hearing about while it can still be changed.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        lines = git("log", "-1", "--format=%ae%n%ce").splitlines()
+        lines += ["", ""]
+        return {"author": lines[0].strip(), "committer": lines[1].strip()}
+    return {
+        "author": identity_email(git("var", "GIT_AUTHOR_IDENT")),
+        "committer": identity_email(git("var", "GIT_COMMITTER_IDENT")),
+    }
+
+
+def identity_problems(emails: dict[str, str]) -> list[str]:
+    """One sentence per address that is not a GitHub no-reply address.
+
+    An empty address is not a problem here: git refuses to commit without one
+    and says so better than this could. Nor is GitHub's own `noreply`
+    address, the committer of an edit made on github.com: the build accepts
+    it, and nobody can change it.
+    """
+    problems, seen = [], set()
+    for role, address in emails.items():
+        if not address or _NOREPLY.search(address) or address in seen:
+            continue
+        seen.add(address)
+        problems.append(
+            f"the commit's {role} email is {mask(address)}, not a GitHub no-reply address"
+        )
+    return problems
 
 
 def main() -> int:
@@ -181,8 +443,8 @@ def main() -> int:
     try:
         from pippa_agentapp_sdk import load_manifest_file, validate_manifest
 
-        # The raw mapping is kept as well as the validated object: the owner
-        # check below reads a field the SDK does not keep.
+        # The raw mapping is kept as well as the validated object: the checks
+        # below read fields the SDK does not keep.
         manifest_data = load_manifest_file(ROOT / "manifest.yaml")
         manifest = validate_manifest(manifest_data)
         results.append(ok(f"manifest.yaml is valid ({manifest.app_id} v{manifest.version})"))
@@ -219,47 +481,94 @@ def main() -> int:
                 f"Change `app.id` in manifest.yaml to: {expected}",
             ))
 
-    # ── Somebody owns this app ───────────────────────────────────────────────
+    # ── The public author name ───────────────────────────────────────────────
     #
-    # A warning rather than a gate; the module docstring says why. The message
-    # is long for a reason: this is the only failure here whose symptom is
-    # nothing happening. The app publishes, the build goes green, and the app
-    # is then missing from a list it was never going to appear in.
-    problem = owner_problem(manifest_data)
-    if problem:
+    # Warnings, not gates; the module docstring says why. Pippa refuses a push
+    # whose name breaks a rule, so the build would stop there anyway.
+    if author_name_unset(manifest_data):
+        warn("app_author_name is empty, so nothing publishes yet.",
+             "It is the public name shown with your app. The build skips every\n"
+             'push until it is filled in ("Nothing to publish yet"). A pseudonym,\n'
+             "never your real name or an email address: CLAUDE.md, step 1.")
+    elif manifest_data.get(AUTHOR_NAME_KEY) is not None:
+        problem = author_name_problem(manifest_data[AUTHOR_NAME_KEY])
+        if problem:
+            warn(problem,
+                 "It is shown to everybody next to your app, so make it a pseudonym:\n"
+                 "never your real name, never an email address. Pippa refuses the\n"
+                 "push until it fits. CLAUDE.md, step 1, has the rules.")
+        else:
+            results.append(ok(
+                f"app_author_name is {normalise_author_name(manifest_data[AUTHOR_NAME_KEY])!r}"
+            ))
+    elif legacy_publisher(manifest_data):
+        warn(ADD_AUTHOR_NAME,
+             'One line at the top of manifest.yaml, above `app:`, and take\n'
+             '`publisher:` out of `app:`:\n'
+             "\n"
+             '    app_author_name: "Tidewatcher"\n'
+             "\n"
+             "A pseudonym, never your real name or an email address.")
+
+    # ── Nothing personal in the manifest ─────────────────────────────────────
+    #
+    # Who owns the app comes from the repository. An `owner_email` line is
+    # left over from an older template, and Pippa refuses it in a public
+    # repository and ignores it in a private one.
+    has_owner_email = owner_email_present(manifest_data)
+    if has_owner_email:
+        warn("Remove `owner_email` from manifest.yaml.",
+             "Pippa knows who owns this app from your repository, so nothing in\n"
+             "this file says who you are. In a public repository Pippa refuses the\n"
+             "push while the line is there; in a private one it ignores it.")
+    places = manifest_address_paths(manifest_data)
+    for place in places:
+        warn(f"manifest.yaml contains an email address (at {place}). Remove it: "
+             "everything in manifest.yaml is shown to people or stored with your app.")
+    if not places and not has_owner_email:
+        results.append(ok("manifest.yaml has no email address in it"))
+
+    # ── No email address in the repository, or on the commits ───────────────
+    #
+    # The build refuses an address in any file, and Pippa shows the name and
+    # address on every commit to anyone who can read the repository.
+    # `.githooks/pre-commit` stops both before the commit exists; this is the
+    # same check for a clone where the hook was never switched on.
+    names = tracked_files()
+    if names:
+        found = scan_files(ROOT, names)
+        for name, number, masked in found:
+            warn(f"{name}:{number} contains the email address {masked}",
+                 "Take it out. Every file here can end up public, and the build\n"
+                 "refuses a push with an email address in any file. Addresses at\n"
+                 "example.com, or a .example or .test domain, are fine.")
+        if not found:
+            results.append(ok("no file contains an email address"))
+    for problem in identity_problems(commit_emails()):
         warn(problem,
-             "Your app is PRIVATE until a reviewer approves it, and owner_email\n"
-             "is the only thing that says who it is private to. Without it, the\n"
-             "app publishes and then nobody can see it — including you, so you\n"
-             "cannot install it, cannot test it and cannot submit it.\n"
+             "Everybody who can read this repository can read it, for good. Set\n"
+             "your GitHub no-reply address for this repository (CLAUDE.md, step 1,\n"
+             "says how to find it), and your pseudonym as the name on commits:\n"
              "\n"
-             "Put the address you sign in to Pippa with at the top of\n"
-             "manifest.yaml, above `app:`\n"
+             '    git config user.email "<id>+<login>@users.noreply.github.com"\n'
+             '    git config user.name "<your app_author_name>"\n'
              "\n"
-             "    owner_email: you@yourcollege.ac.uk\n"
-             "\n"
-             "In a public repository anyone can read that address, and it stays\n"
-             "in the git history even if you change it later.\n"
-             "\n"
-             "docs/REVIEW_AND_SHARING.md explains the rest.")
-    else:
-        # Not the address itself: this prints into the build log, which is as
-        # public as the repository.
-        results.append(ok("owner_email is set"))
+             "A commit not pushed yet can then be fixed with\n"
+             "`git commit --amend --no-edit --reset-author`.")
 
     # ── The summary must not contain " by " ──────────────────────────────────
     #
-    # The badge under a reply is built as "[via <name> <version> by <publisher>]"
+    # The badge under a reply is built as "[via <name> <version> by <author>]"
     # and split on the FIRST " by ". A summary containing the word steals the
-    # split, and the badge then shows a fragment of your summary where the
-    # publisher's name belongs. Nothing else notices, which is why it has to be
+    # split, and the badge then shows a fragment of your summary where your
+    # author name belongs. Nothing else notices, which is why it has to be
     # caught here: the symptom appears days later, on somebody else's screen.
     if " by " in f" {manifest.summary} ".lower():
         results.append(bad(
             'app.summary contains the word "by"',
-            'The store badge is parsed as "... by <publisher>" and splits on '
+            'The store badge is parsed as "... by <author name>" and splits on '
             'the first "by", so the badge would show your summary text as the '
-            "publisher. Reword the summary without it.",
+            "author. Reword the summary without it.",
         ))
     else:
         results.append(ok('app.summary does not contain "by"'))

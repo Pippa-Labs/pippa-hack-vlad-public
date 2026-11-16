@@ -56,9 +56,9 @@ usual — Pippa still pulls the inputs out of the message, and if your app has
 several outcomes, a model still picks which of *yours* fits. Two things
 differ:
 
-- Your app is told so: `call.context.explicit` is `True`, provided the app
-  was published after the platform update that added it. One published
-  before that sees it only after you publish it again; see below the table.
+- Your app is told so: `call.context.explicit` is `True`, provided the
+  version that answers was published after the platform update that added
+  it. A version published before that never sees it; see below the table.
 - If your app cannot answer, Pippa says so in one sentence — *"Days Until
   couldn't answer: I could not work out which date you meant."* — instead of
   answering from her own knowledge, and she never hands the question to
@@ -79,11 +79,15 @@ This is the reason a stranger's app can be allowed to run at all. It is not a
 promise your app makes; it is the shape of what it is handed.
 
 `explicit` says how the call came about, not who made it. Read it as
-`getattr(call.context, "explicit", False)`: it only reaches an app published
-after the platform update that added it, because the SDK your app runs on is
-fixed when it is published. An app published before that update is still
-called when somebody picks it with `@`, but it runs on an older SDK that has
-no such field, and it sees the flag only after you publish it again.
+`getattr(call.context, "explicit", False)`, because whether your app gets it
+depends on when the version that answers was published, not on when somebody
+asks: each version keeps the SDK it was published with. A version published
+before the platform update that added the flag is still called when somebody
+picks it with `@`, but it runs on an older SDK that has no such field. Only a
+version published after the update sees the flag. So push again (a draft can
+keep its version number; a submitted version needs a new one), and make sure
+the new version is the one that answers: the badge names it.
+`docs/REVIEW_AND_SHARING.md` says which version each person gets.
 
 ## Why `persistence: none` is not negotiable
 

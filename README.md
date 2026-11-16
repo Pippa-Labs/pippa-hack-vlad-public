@@ -8,14 +8,15 @@ Claude Code does the building. You decide what the app should do.
 
 > **Your repository is public.** Anyone on the internet can read it, from your
 > first push. That covers your code and every earlier version of it, the name
-> and email address on each commit, the build logs, the comments on your
-> commits, and the `owner_email` in `manifest.yaml`. Deleting something later
-> does not take it out of the history.
+> and email address on each commit, the build logs and the comments on your
+> commits. Deleting something later does not take it out of the history.
 >
-> So never put a password, a key from your own account or anything private in
-> it. If one is pushed by mistake, first revoke it on the site that issued it,
-> then tell an organiser. Claude checks which email address your commits will
-> show before the first one.
+> So never put a password, a key from your own account, your email address,
+> your real name or anything else private in it. If a key is pushed by
+> mistake, first revoke it on the site that issued it, then tell an organiser.
+> Before the first commit, Claude sets your commits to show your pseudonym and
+> GitHub's private no-reply address, and switches on a check that stops a
+> commit carrying an email address.
 >
 > Strangers can comment on your commits and open issues. The build's own
 > messages come from **github-actions[bot]**. Anything from anyone else is just
@@ -44,7 +45,7 @@ with a badge showing your app's name.
 |---|---|
 | **Claude Code** | installed and signed in |
 | **A GitHub account** you can push from | you'll have had an invitation to your repo — accept it |
-| **A Pippa account** | from your Pippa invitation email — **set this up first**, see step 4. The address it arrives at goes in your app's `manifest.yaml`; that is what makes the app yours |
+| **A Pippa account** | from your Pippa invitation email — **set this up first**, see step 4. Your repository belongs to that account, so every app you publish from it is yours, with nothing to fill in |
 
 That's it. No Python, no local setup.
 
@@ -64,6 +65,13 @@ becomes the app's id, so a second app needs a repository of its own.
 
 Claude will clone it, read the instructions that ship inside it, and start
 building. It knows the rules, the contract and the common mistakes already.
+
+**Claude asks you for one thing first: a public author name.** It is shown to
+everybody next to your app, as "by <name>", and anyone can read it in your
+repository, so choose a pseudonym — a made-up name or a nickname. Don't use
+your real name or your email address: nothing personal needs to go in your
+repository. Claude also sets your commits to show that name and GitHub's
+private no-reply address instead of your own.
 
 Keep going in plain language: *"add low tide too"*, *"make the error friendlier
 when the beach isn't found"*.
@@ -93,18 +101,16 @@ name and what it can do.
 There's also a green tick in the **Actions** tab of your repo if you'd rather
 watch it happen.
 
-**It's published to you, not to everybody.** A new app is private until a
-reviewer approves it. You can install it and use it in Pippa straight away;
-nobody else can even see that it exists. Step 5 is how it becomes public.
+**It's published to you, not to everybody.** The comment says your app is
+live, and it is — privately. A new app is private until a reviewer approves
+it. You can install it and use it in Pippa straight away; nobody else can even
+see that it exists. Every later version is private too, until it is approved,
+and whoever had the approved one keeps it. Step 5 is how it becomes public.
 
-That's also why `manifest.yaml` has your email address in it — `owner_email`,
-the address you sign in to Pippa with. It's the only thing that says the app
-is yours. Get it wrong and the app publishes happily and then **you** can't
-see it either, with nothing anywhere reporting an error.
-
-Know this before you push it: your repository is public, so anyone can read
-that address in `manifest.yaml`, and it stays in the git history even if you
-change it later.
+Pippa knows the app is yours from the repository it was pushed from: Pippa
+Labs created your repository for your Pippa account, so every app published
+from it belongs to you. Nothing in the repository says who you are, and
+nothing needs to. A copy or a fork of it can't publish at all.
 
 ---
 
@@ -118,52 +124,76 @@ Authenticator, Authy, 1Password — any of them).
    **console.getpippa.ai**, not the app itself.
 2. **Set up two-factor.** Not optional. Save the backup codes — they're shown
    once.
-3. Open **[app.getpippa.ai/apps](https://app.getpippa.ai/apps)**, find your app
-   by name — it's in the list because it's yours — and **install** it.
+3. Open **[app.getpippa.ai/apps](https://app.getpippa.ai/apps)** and choose the
+   **Created by me** tab. Your app has a card there — it's there because it's
+   yours. Press **Install**: that installs your latest version, the one you
+   just pushed.
 4. Go to the chat and **just ask it something** — start with one of your own
    example phrases. Installing it *is* how you switch it on: from then on,
-   Pippa decides for herself when your app should answer.
+   Pippa decides for herself when your app should answer. And the version you
+   install is the one you're testing.
 
 When Pippa answers using your app, the reply carries a small green
-**via &lt;your app name&gt;** badge. That's how you know it was yours. It also
-says who chose it: **picked by Pippa**, or **you picked it**.
+**via &lt;your app name&gt; &lt;version&gt;** badge — **via Tide Times 0.2.0**,
+say. That's how you know it was yours, and which version answered. It also
+says who chose it: **picked by Pippa**, or **you picked it** — and on a
+version other people don't get yet, **your draft** or **not live**.
+
+**Pushed a new version?** Your card shows what you have under **Installed for
+you**, and it stays on the version you installed until you press **Update to
+latest**. Easier while you're building: switch on **Always use my latest
+version** on the same card. Then every push is what you get in chat — no
+reinstalling.
 
 **Want to ask your app directly?** Start the message with **@** and pick your
 app from the list. Pippa skips deciding and hands the question straight to
-your app — the quickest way to check the app itself works. It tells you
-nothing about whether Pippa would have picked it on her own, though, so ask
-without the **@** too. (Switch on **Keep using** and every message in that
-chat goes to your app until you switch it off.)
+your app — the version installed for you — which is the quickest way to check
+the app itself works. It tells you nothing about whether Pippa would have
+picked it on her own, though, so ask without the **@** too. (Switch on **Keep
+using** and every message in that chat goes to your app until you switch it
+off.)
 
 > **Just published and can't see it?** The Apps page loads the list once.
-> Reload the page. Still missing? Check that `owner_email` in `manifest.yaml`
-> is the address you're signed in as — a private app you don't own is a
-> private app you can't see.
+> Reload the page. Still missing? Check you're signed in with the Pippa
+> account your invitation was for — your repository belongs to that account,
+> and a private app you don't own is a private app you can't see. No
+> **Created by me** tab at all usually means exactly that.
 
 ---
 
 ## Step 5 — Show it to someone, then submit it
 
-**Show it to someone first.** On your app's page in Pippa you can add a
-**tester** by email address, and they can install and use your app while it's
-still private. The person next to you asking it something you never thought of
-is the most useful ten minutes you'll spend on it.
+**Show it to someone first.** On your app's card you can add a **tester** by
+email address, and they can install and use your app while it's still
+private. They get your latest version, unless you choose another under
+**Testers get**. The person next to you asking it something you never thought
+of is the most useful ten minutes you'll spend on it.
 
-**Then submit it.** When you're happy, press **Submit for review** on that same
-page. A reviewer reads your manifest — the name, the summary, what the app can
-do, the phrases that trigger it — and either approves it, which makes it public
-to everybody, or sends it back with a reason you can read.
+**Then submit it.** When you're happy, open **Versions** on that same card and
+press **Submit for review** next to the version you tried. A reviewer reads
+your manifest — the name, the summary, what the app can do, the phrases that
+trigger it — and either approves it, which makes it public to everybody, or
+sends it back with a reason you can read.
 
-Rejected isn't a verdict on you; it's a list of changes. Fix them, push, submit
-again. And you can keep pushing while you wait — it stays in the queue.
+Submitting freezes that version: from then on, a push with the same version
+number is refused. You can keep pushing while you wait — change the version
+number in `manifest.yaml` first, and the new version is a draft for you to try
+while the one in the queue stays as it was. (Spotted a typo the moment you
+pressed the button? **Withdraw from review** turns that version back into a
+draft you can push again.)
+
+Rejected isn't a verdict on you; it's a list of changes. Fix them in a new
+version — change the number, push, try it — and submit that one. The rejected
+version itself can't be submitted again.
 
 There's no command for any of this, and nothing for Claude to run: submitting
 is a button because it's you saying "this one's ready", which is a different
 thing from a push.
 
 `docs/REVIEW_AND_SHARING.md` has the rest — including how to change an app
-that's already approved. (Short version: bump the version number. The approved
-one keeps working for everyone while the new one is private to you.)
+that's already approved. (Short version: bump the version number. Each version
+keeps its own code, so the approved one keeps working for everyone while the
+new one is private to you.)
 
 ---
 
@@ -264,9 +294,9 @@ Once your app is live, run a test matrix. Three lists, and you need all three:
 
 Send each one in the chat — **without** the @, and with **Keep using**
 switched off, or every message goes to your app — and check the reply carries
-the green **via &lt;your app name&gt;** badge saying **picked by Pippa**. Keep
-the list — when you change your phrases, run it again. That is the whole test,
-and it is repeatable.
+the green **via &lt;your app name&gt;** badge saying **picked by Pippa**, with
+the version you mean to test. Keep the list — when you change your phrases,
+run it again. That is the whole test, and it is repeatable.
 
 ### And if your app calls an API, test how it fails
 
@@ -332,8 +362,8 @@ can act on, and no other app should pick the question up instead.
 ## A tip worth taking
 
 **Get something deployed in the first twenty minutes**, before the app is
-finished. Ask Claude to set the app id, give it a name, and push the example
-app as-is. Watch it go live, install it, ask it a question.
+finished. Give Claude your author name, ask it to give the app a name, and push
+the example app as-is. Watch it go live, install it, ask it a question.
 
 Then you know the whole pipeline works — so when something breaks later, you
 know it's your app and not the plumbing.

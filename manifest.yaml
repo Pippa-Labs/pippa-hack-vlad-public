@@ -20,34 +20,32 @@ manifest_version: 1
 # throws away the machine your code ran on when it finishes.
 persistence: none
 
-# ── Who this app belongs to ──────────────────────────────────────────────────
+# ── Your public author name ──────────────────────────────────────────────────
 #
-# A PLACEHOLDER. Replace it with the email address you sign in to Pippa with —
-# the address your Pippa invitation was sent to.
+# EMPTY ON PURPOSE. Claude asks you for it before anything else, and nothing
+# publishes until it is filled in (the build says "Nothing to publish yet").
 #
-# It matters because a published app is PRIVATE until a reviewer approves it,
-# and this line is the only thing in the whole system that says whose it is.
-# Nothing else does: the publishing pipeline knows which repository pushed, and
-# a repository is not a person.
+# It is the name everybody sees next to your app: "by <name>" on the install
+# screen, in the list of apps and on every answer your app gives. So it is
+# PUBLIC, and it should be a pseudonym: a made-up name or a nickname, never
+# your real name and never an email address. This repository is public too,
+# so anyone can read it here as well.
 #
-# So if it is missing, or misspelt, or somebody else's address, the app
-# publishes perfectly happily and is then invisible to everyone — you
-# included. You cannot install it, cannot test it and cannot submit it for
-# review, and nothing reports an error anywhere, because from the platform's
-# point of view nothing went wrong. `scripts/check.py` warns about it for
-# exactly that reason.
+# The rules: 3 to 30 characters; letters, numbers, spaces, dots, hyphens and
+# underscores; starting with a letter or a number; nothing that looks like an
+# email or a web address; and not "pippa", "official" or "verified". Another
+# builder cannot use the same name, and you can use yours on all your apps.
 #
-# Pippa does not show this address to users; `publisher` below is the name
-# they see. This file is in your repository, though: in a public repository
-# anyone can read the address, and it stays in the git history even if you
-# change it later. Know that before you push it.
-#
-# docs/REVIEW_AND_SHARING.md is the whole story.
-owner_email: you@example.com
+# It does not decide who owns the app, and nothing in this file does. Pippa
+# Labs created this repository for your Pippa account, so every app published
+# from it is yours. docs/REVIEW_AND_SHARING.md is the whole story.
+app_author_name: ""
 
 app:
-  # A PLACEHOLDER. Replace it before anything else, or the build will refuse
-  # to publish.
+  # Filled in for you. A new repository replaces this placeholder within a
+  # minute of being created, from the repository's name, and commits it as
+  # github-actions[bot] (.github/workflows/setup.yml). Until then the build
+  # publishes nothing.
   #
   # It must be `hack.` + this repository's name with `pippa-hack-` removed and
   # every hyphen turned into an underscore:
@@ -56,14 +54,26 @@ app:
   #
   # Hyphens are not valid in an app id anywhere. `git remote get-url origin`
   # tells you the repository name.
-  id: hack.your_app_name_here
+  id: hack.vlad_public
   name: Days Until
+  # The version you are pushing. Pippa keeps a copy of the code of every
+  # version, so pushing a new version never changes an older one: the approved
+  # version keeps working for everyone while you try the next.
+  #
+  # Until you submit a version for review you can push it again under the
+  # same number, as often as you like, and it is replaced. From the moment
+  # you press Submit for review it is frozen, so change this number before
+  # your next push (0.1.0 -> 0.1.1), or the push is refused.
+  #
+  # Three numbers: 0.1.0, not 0.1 and not v0.1.0. Pippa never compares them:
+  # your "latest" version is simply the one you pushed most recently.
+  # docs/REVIEW_AND_SHARING.md says which version you, your testers and
+  # everybody else get.
   version: 0.1.0
-  publisher: Your name
   # One or two sentences, written for someone deciding whether to install it.
   # Say what it does and what it sends anywhere. Never use the word "by" — the
-  # badge Pippa shows is parsed from "[via <name> <version> by <publisher>]"
-  # and splits on the first "by".
+  # badge Pippa shows is parsed from "[via <name> <version> by <author name>]"
+  # (the author name is `app_author_name` above) and splits on the first "by".
   summary: >-
     Works out how many days there are until a date you name, and says which
     day of the week it falls on.
