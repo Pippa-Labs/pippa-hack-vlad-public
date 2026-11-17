@@ -274,3 +274,176 @@ def test_any_other_commit_address_is_a_problem_said_once_and_masked():
         "the commit's author email is p***@laptop.local, not a GitHub no-reply address"
     ]
     assert personal() not in problems[0]
+
+
+# ── app_secrets: the app's own API keys ──────────────────────────────────────
+
+def key(name="OPENWEATHER_API_KEY", **extra) -> dict:
+    return {"name": name, "description": "OpenWeather key, used to look up the forecast", **extra}
+
+
+def test_no_app_secrets_declares_nothing():
+    assert check.app_secrets_problems(manifest()) == ([], [], [])
+    assert check.app_secrets_problems(manifest(app_secrets=[])) == ([], [], [])
+    assert check.app_secrets_problems(manifest(app_secrets=None)) == ([], [], [])
+
+
+def test_a_well_formed_declaration_has_no_problem():
+    data = manifest(app_secrets=[
+        key(),
+        key("GIPHY_KEY", required=False, scope="app"),
+    ])
+    assert check.app_secrets_problems(data) == (["OPENWEATHER_API_KEY", "GIPHY_KEY"], [], [])
+
+
+def test_app_secrets_must_be_a_list_of_entries():
+    assert check.app_secrets_problems(manifest(app_secrets={"name": "X"}))[1] == [
+        'app_secrets must be a list, one `- name: ...` entry per key '
+        '(docs/API_APPS.md, "Using API keys").'
+    ]
+    assert check.app_secrets_problems(manifest(app_secrets=["OPENWEATHER_API_KEY"]))[1] == [
+        "app_secrets[0] must have `name:` and `description:` lines."
+    ]
+
+
+def test_a_name_must_be_capitals_digits_and_underscores():
+    for bad_name in ("openweather_api_key", "OW", "1KEY", "MY-KEY", "MY KEY", "K" * 65, 42, None,
+                     "OPENWEATHER_API_KEY" + chr(10)):
+        names, problems, _ = check.app_secrets_problems(manifest(app_secrets=[key(bad_name)]))
+        assert names == [], bad_name
+        assert problems and "capital letters, digits and underscores" in problems[0], bad_name
+    assert check.app_secrets_problems(manifest(app_secrets=[key("K" * 64)]))[1] == []
+
+
+def test_platform_and_system_names_are_reserved():
+    for reserved in ("PIPPA_KEY", "AWS_SECRET_ACCESS_KEY", "LAMBDA_TASK_ROOT", "OTEL_TOKEN",
+                     "PATH", "HOME", "PYTHONPATH", "LD_PRELOAD", "TZ", "LANG", "LC_ALL"):
+        names, problems, _ = check.app_secrets_problems(manifest(app_secrets=[key(reserved)]))
+        assert names == [] and problems, reserved
+        # TZ is also too short to be a name at all, which is said first.
+        assert "is reserved" in problems[0] or reserved == "TZ", reserved
+
+
+def test_a_name_declared_twice_is_a_problem():
+    names, problems, _ = check.app_secrets_problems(manifest(app_secrets=[key(), key()]))
+    assert names == ["OPENWEATHER_API_KEY"]
+    assert problems == ["app_secrets[1].name OPENWEATHER_API_KEY is declared twice."]
+
+
+def test_the_description_is_required_and_a_long_one_is_only_warned_about():
+    _, problems, _ = check.app_secrets_problems(manifest(app_secrets=[{"name": "WEATHER_KEY"}]))
+    assert problems and problems[0].startswith("app_secrets WEATHER_KEY needs a description")
+    _, problems, _ = check.app_secrets_problems(
+        manifest(app_secrets=[{"name": "WEATHER_KEY", "description": "   "}]))
+    assert problems and "needs a description" in problems[0]
+    _, problems, policy = check.app_secrets_problems(
+        manifest(app_secrets=[{"name": "WEATHER_KEY", "description": "x" * 201}]))
+    assert problems == []
+    assert policy == ["app_secrets WEATHER_KEY has a description of 201 characters; "
+                      "Pippa allows at most 200."]
+    assert check.app_secrets_problems(
+        manifest(app_secrets=[{"name": "WEATHER_KEY", "description": "x" * 200}])) == (
+        ["WEATHER_KEY"], [], [])
+    # Whitespace around it does not count, as Pippa strips it first.
+    assert check.app_secrets_problems(
+        manifest(app_secrets=[{"name": "WEATHER_KEY", "description": "  " + "x" * 200 + chr(10)}])
+    ) == (["WEATHER_KEY"], [], [])
+
+
+def test_required_is_true_or_false():
+    _, problems, policy = check.app_secrets_problems(manifest(app_secrets=[key(required="yes")]))
+    assert problems == ["app_secrets OPENWEATHER_API_KEY.required must be true or false."]
+    assert policy == []
+
+
+def test_the_scope_rule_is_a_warning_because_pippa_may_change_it():
+    """`scope: user` is a planned follow-up. This file is never updated in a
+    builder's repository, so it must not go on failing pushes after Pippa
+    starts accepting it: Pippa's own check is the one that refuses."""
+    names, problems, policy = check.app_secrets_problems(manifest(app_secrets=[key(scope="user")]))
+    assert names == ["OPENWEATHER_API_KEY"] and problems == []
+    assert len(policy) == 1 and "scope: user" in policy[0] and "not support" in policy[0]
+    _, problems, policy = check.app_secrets_problems(manifest(app_secrets=[key(scope="global")]))
+    assert problems == []
+    assert policy == ["app_secrets OPENWEATHER_API_KEY.scope should be `app` (or left out)."]
+
+
+def test_an_unknown_field_is_named_in_a_warning():
+    _, problems, policy = check.app_secrets_problems(manifest(app_secrets=[key(value="nope")]))
+    assert problems == []
+    assert policy == [
+        "app_secrets OPENWEATHER_API_KEY has value, which Pippa did not know when this "
+        "file was written. An entry had only name, description, required, scope."
+    ]
+
+
+def test_more_than_twenty_keys_is_a_warning():
+    twenty = [key(f"KEY_{n:02d}") for n in range(20)]
+    assert check.app_secrets_problems(manifest(app_secrets=twenty))[1:] == ([], [])
+    names, problems, policy = check.app_secrets_problems(
+        manifest(app_secrets=twenty + [key("KEY_20")]))
+    assert len(names) == 21
+    assert problems == []
+    assert policy == ["app_secrets declares 21 keys; Pippa allows at most 20."]
+
+
+# ── Environment variables the app reads ──────────────────────────────────────
+
+def test_every_common_way_of_reading_the_environment_is_seen():
+    source = (
+        "import os\n"
+        "from os import environ, getenv\n"
+        'TOP = os.environ.get("AT_IMPORT")\n'
+        "class App:\n"
+        "    def handle(self, call):\n"
+        '        a = os.environ["ONE"]\n'
+        '        b = os.environ.get("TWO", "")\n'
+        '        c = os.getenv("THREE")\n'
+        '        d = environ["FOUR"]\n'
+        '        e = getenv("FIVE")\n'
+        "        f = os.environ.get(name_built_at_run_time)\n"
+        "        return a\n"
+    )
+    assert check.env_reads(source) == [
+        ("AT_IMPORT", 3, False), ("ONE", 6, True), ("TWO", 7, True),
+        ("THREE", 8, True), ("FOUR", 9, True), ("FIVE", 10, True),
+    ]
+    assert check.env_reads("def broken(:\n") == []
+
+
+def test_an_undeclared_name_and_a_read_at_import_are_warned_about(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "import os\n"
+        'KEY_AT_IMPORT = os.environ.get("WEATHER_KEY")\n'
+        "class App:\n"
+        "    def handle(self, call):\n"
+        '        region = os.environ.get("AWS_REGION")\n'
+        '        return os.environ["GIPHY_KEY"], os.environ["WEATHER_KEY"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "test_app.py").write_text('import os\nos.environ["ONLY_IN_TESTS"]\n',
+                                          encoding="utf-8")
+    (tmp_path / "conftest.py").write_text('import os\nos.getenv("ALSO_TESTS")\n',
+                                          encoding="utf-8")
+    found = check.env_read_warnings(tmp_path, ["WEATHER_KEY"])
+    messages = [message for message, _ in found]
+    assert messages == [
+        "the app reads GIPHY_KEY (app.py:6), but manifest.yaml does not declare it under app_secrets",
+        "WEATHER_KEY is read when app.py is imported (app.py:2), not in a call",
+    ]
+    assert "- name: GIPHY_KEY" in found[0][1]
+    assert check.env_read_warnings(tmp_path, ["WEATHER_KEY", "GIPHY_KEY"])[0][0].startswith(
+        "WEATHER_KEY is read when")
+
+
+def test_the_tests_run_without_the_values_from_dot_env(monkeypatch):
+    monkeypatch.setenv("FROM_DOT_ENV_ONLY", "test-key-000000000000000000")
+    monkeypatch.setenv("SET_IN_THE_TERMINAL", "kept")
+    env = check.environment_without(["FROM_DOT_ENV_ONLY"])
+    assert "FROM_DOT_ENV_ONLY" not in env
+    assert env["SET_IN_THE_TERMINAL"] == "kept"
+
+
+def test_the_checker_finds_its_two_helpers():
+    assert check.check_secrets is not None
+    assert check.local_env is not None

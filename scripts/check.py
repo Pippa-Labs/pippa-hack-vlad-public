@@ -29,16 +29,40 @@ because the test output in between is long enough to hide it.
 It never prints an email address it finds, only its first letter and its
 domain (`s***@college.example`): the build log is as readable as the
 repository.
+
+**API keys.** An app that needs its own key declares it under `app_secrets:`
+in manifest.yaml and reads it with `os.environ["NAME"]`. This file checks the
+declarations by Pippa's rules (a block it cannot read as a list of keys is a
+FAIL; the limits Pippa may change, such as how many keys or `scope: user`,
+only warn, as above), warns when the code reads a name that is not
+declared, and runs `scripts/check_secrets.py` over every tracked file: a key
+committed here is a FAIL, because the build refuses it too. It never prints a
+key, only where it is. If there is a `.env` it is read first (only names not
+already set); the build has none, and the tests always run without those
+values.
 """
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
 import sys
 import unicodedata
 from pathlib import Path
+
+# The other two tools in this folder. Imported by name because `scripts/` is
+# on the path whenever this file runs (`python scripts/check.py`). A copy of
+# the repository from before they existed still gets every other check.
+try:
+    import check_secrets
+except ImportError:  # pragma: no cover - only in a repository missing the file
+    check_secrets = None
+try:
+    import local_env
+except ImportError:  # pragma: no cover - only in a repository missing the file
+    local_env = None
 
 # Windows consoles still default to a legacy code page on many machines, and
 # an em dash or a tick in a message is then either mangled or raises
@@ -424,9 +448,248 @@ def identity_problems(emails: dict[str, str]) -> list[str]:
     return problems
 
 
+# ── API keys: app_secrets ────────────────────────────────────────────────────
+#
+# The keys the app itself needs (a weather service's API key), which the
+# builder sets in Pippa: Apps > Created by me > the app > Keys. Pippa hands
+# them to the app in `os.environ` for each call. Not `secrets:`, which means
+# a credential a USER grants, and which hackathon apps may not declare.
+#
+# The rules are Pippa's, which checks them again when it registers the app.
+
+APP_SECRETS_KEY = "app_secrets"
+APP_SECRET_NAME_PATTERN = r"^[A-Z][A-Z0-9_]{2,63}$"
+APP_SECRETS_MAX = 20
+APP_SECRET_DESCRIPTION_MAX = 200
+#: Names that start like this belong to the platform the app runs on.
+RESERVED_SECRET_PREFIXES = ("PIPPA_", "AWS_", "LAMBDA_", "_X_AMZN", "OTEL_")
+#: Names Python and the operating system rely on.
+RESERVED_SECRET_NAMES = frozenset({
+    "PATH", "HOME", "PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH",
+    "TZ", "LANG", "LC_ALL",
+})
+APP_SECRET_FIELDS = ("name", "description", "required", "scope")
+
+_APP_SECRET_NAME = re.compile(APP_SECRET_NAME_PATTERN)
+
+
+def reserved_secret_name(name: str) -> bool:
+    """Whether a name belongs to the platform or the system, not the app."""
+    return name in RESERVED_SECRET_NAMES or name.startswith(RESERVED_SECRET_PREFIXES)
+
+
+def app_secrets_problems(manifest_data) -> tuple[list[str], list[str], list[str]]:
+    """(declared names, problems, policy warnings) for the `app_secrets` block.
+
+    A problem is a FAIL: the block cannot be read as a list of keys at all (it
+    is not a list, an entry has no valid name or no description, a name is
+    declared twice or belongs to the platform). A policy warning is a rule
+    Pippa may change (how many keys, `scope: user`, which fields an entry
+    has, how long a description is): this file is a copy that is never
+    updated, so it only warns, and Pippa, which checks every push, decides.
+
+    Every message is a sentence naming the entry, so it can be fixed without
+    reading this file. No block, or an empty one, declares nothing.
+    """
+    if not isinstance(manifest_data, dict):
+        return [], [], []
+    block = manifest_data.get(APP_SECRETS_KEY)
+    if block is None or block == []:
+        return [], [], []
+    if not isinstance(block, list):
+        return [], [
+            "app_secrets must be a list, one `- name: ...` entry per key "
+            "(docs/API_APPS.md, \"Using API keys\")."
+        ], []
+    names: list[str] = []
+    problems: list[str] = []
+    policy: list[str] = []
+    if len(block) > APP_SECRETS_MAX:
+        policy.append(
+            f"app_secrets declares {len(block)} keys; Pippa allows at most "
+            f"{APP_SECRETS_MAX}."
+        )
+    for index, entry in enumerate(block):
+        where = f"app_secrets[{index}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} must have `name:` and `description:` lines.")
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not _APP_SECRET_NAME.fullmatch(name):
+            shown = repr(name) if isinstance(name, str) else "missing"
+            problems.append(
+                f"{where}.name is {shown}: it must be capital letters, digits and "
+                "underscores, 3 to 64 characters, starting with a letter "
+                "(like OPENWEATHER_API_KEY)."
+            )
+        elif reserved_secret_name(name):
+            problems.append(
+                f"{where}.name {name} is reserved for the platform the app runs on. "
+                "Choose another name, such as one starting with the service's name."
+            )
+        elif name in names:
+            problems.append(f"{where}.name {name} is declared twice.")
+        else:
+            names.append(name)
+            where = f"app_secrets {name}"
+        description = entry.get("description")
+        if not isinstance(description, str) or not description.strip():
+            problems.append(
+                f"{where} needs a description: one sentence saying what the key is "
+                "for. Reviewers and the Keys page show it."
+            )
+        elif len(description.strip()) > APP_SECRET_DESCRIPTION_MAX:
+            policy.append(
+                f"{where} has a description of {len(description.strip())} characters; "
+                f"Pippa allows at most {APP_SECRET_DESCRIPTION_MAX}."
+            )
+        if "required" in entry and not isinstance(entry["required"], bool):
+            problems.append(f"{where}.required must be true or false.")
+        scope = entry.get("scope", "app")
+        if scope == "user":
+            policy.append(
+                f"{where} has `scope: user`, a key each user provides. Pippa did "
+                "not support that when this file was written: use `scope: app` "
+                "(or leave it out) unless Pippa now says otherwise."
+            )
+        elif scope != "app":
+            policy.append(f"{where}.scope should be `app` (or left out).")
+        unknown = sorted(str(key) for key in entry if key not in APP_SECRET_FIELDS)
+        if unknown:
+            policy.append(
+                f"{where} has {', '.join(unknown)}, which Pippa did not know when "
+                f"this file was written. An entry had only {', '.join(APP_SECRET_FIELDS)}."
+            )
+    return names, problems, policy
+
+
+# ── Which environment variables the app reads ────────────────────────────────
+
+def _env_name(node) -> str | None:
+    """The literal name in `os.environ["X"]`, `os.environ.get("X")`,
+    `os.getenv("X")` (and the same through `from os import environ, getenv`),
+    or None."""
+    def is_environ(value) -> bool:
+        return (
+            (isinstance(value, ast.Attribute) and value.attr == "environ"
+             and isinstance(value.value, ast.Name) and value.value.id == "os")
+            or (isinstance(value, ast.Name) and value.id == "environ")
+        )
+
+    def literal(value) -> str | None:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+        return None
+
+    if isinstance(node, ast.Subscript) and is_environ(node.value):
+        return literal(node.slice)
+    if isinstance(node, ast.Call) and node.args:
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in ("get", "pop") and is_environ(func.value):
+            return literal(node.args[0])
+        if (isinstance(func, ast.Attribute) and func.attr == "getenv"
+                and isinstance(func.value, ast.Name) and func.value.id == "os"):
+            return literal(node.args[0])
+        if isinstance(func, ast.Name) and func.id == "getenv":
+            return literal(node.args[0])
+    return None
+
+
+def env_reads(source: str) -> list[tuple[str, int, bool]]:
+    """(name, line, inside a function) for every environment variable the
+    code reads by a literal name. Best effort: a name built at run time is
+    not seen. Code that does not parse reads nothing here; the import check
+    reports it."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    found: list[tuple[str, int, bool]] = []
+
+    def walk(node, in_function: bool) -> None:
+        name = _env_name(node)
+        if name is not None:
+            found.append((name, getattr(node, "lineno", 0), in_function))
+        inside = in_function or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        for child in ast.iter_child_nodes(node):
+            walk(child, inside)
+
+    walk(tree, False)
+    return found
+
+
+def app_source_files(root: Path) -> list[Path]:
+    """The app's own Python files: the top level, without the tests."""
+    return sorted(
+        path for path in root.glob("*.py")
+        if not (path.name.startswith("test_") or path.name.endswith("_test.py")
+                or path.name == "conftest.py")
+    )
+
+
+def env_read_warnings(root: Path, declared: list[str]) -> list[tuple[str, str]]:
+    """(warning, fix) for environment variables the app reads but does not
+    declare in `app_secrets`, and for declared keys read when the module is
+    imported rather than during a call.
+
+    Platform names (PIPPA_, AWS_, ...) are not the app's to declare and are
+    left out.
+    """
+    undeclared: dict[str, list[str]] = {}
+    at_import: dict[str, list[str]] = {}
+    for path in app_source_files(root):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for name, line, in_function in env_reads(source):
+            if reserved_secret_name(name):
+                continue
+            where = f"{path.name}:{line}"
+            if name not in declared:
+                undeclared.setdefault(name, []).append(where)
+            elif not in_function:
+                at_import.setdefault(name, []).append(where)
+    warnings_found = []
+    for name, places in undeclared.items():
+        warnings_found.append((
+            f"the app reads {name} ({', '.join(places)}), but manifest.yaml does not "
+            "declare it under app_secrets",
+            "Pippa only gives the app the keys it declares, so in Pippa it will be\n"
+            "missing. Declare it:\n"
+            "\n"
+            "    app_secrets:\n"
+            f"      - name: {name}\n"
+            '        description: "What the key is for, in one sentence"\n'
+            "\n"
+            "docs/API_APPS.md, \"Using API keys\".",
+        ))
+    for name, places in at_import.items():
+        warnings_found.append((
+            f"{name} is read when app.py is imported ({', '.join(places)}), not in a call",
+            "Pippa puts the key in os.environ for each call only, so read it\n"
+            "inside handle() (or a method it calls), never at the top of a file.",
+        ))
+    return warnings_found
+
+
+def environment_without(names: list[str]) -> dict[str, str]:
+    """This process's environment without the names read from `.env`: the
+    tests run the way they run in the build, where there is no `.env`."""
+    return {key: value for key, value in os.environ.items() if key not in names}
+
+
 def main() -> int:
     print("\nChecking your app before you push\n")
     results = []
+
+    # Your keys, from `.env` on your computer, so that importing the app
+    # below sees what it would see in Pippa. Names only are printed. In the
+    # build there is no `.env`, and this does nothing.
+    from_dot_env = local_env.load(ROOT / ".env") if local_env else []
+    if from_dot_env:
+        print(f"  --  read {', '.join(from_dot_env)} from .env (values not shown)",
+              flush=True)
 
     # ── The files that must exist ────────────────────────────────────────────
     for name in ("app.py", "manifest.yaml"):
@@ -573,26 +836,44 @@ def main() -> int:
     else:
         results.append(ok('app.summary does not contain "by"'))
 
-    # ── No credentials ───────────────────────────────────────────────────────
+    # ── No user credentials ──────────────────────────────────────────────────
     #
     # Registration refuses any hackathon app that asks for a connector or a
     # secret: granting a stranger's app a real user's Google account is not
     # something a workshop can consent to on that user's behalf. Without this
     # check the refusal arrives from the publisher, after the push, in a log.
+    # The app's OWN keys are a different thing: `app_secrets`, below.
     for field in ("connectors", "secrets"):
         declared = getattr(manifest, field, None) or ()
         if declared:
             results.append(bad(
                 f"manifest.yaml declares {field}",
-                f"Hackathon apps may not ask for credentials, and publishing "
-                f"refuses any app that does. Remove the `{field}:` block. Your "
-                f"app can still call a public API that needs no key, or one "
-                f"whose provider publishes a demo key for everyone. Never use a "
-                f"key tied to your own account: this repository is public. "
-                f"See docs/API_APPS.md.",
+                f"Hackathon apps may not ask a user for their credentials, and "
+                f"publishing refuses any app that does. Remove the `{field}:` "
+                f"block. If the app needs its own API key, declare it under "
+                f"`app_secrets:` instead and set the value in Pippa; never in a "
+                f"file, because this repository is public (docs/API_APPS.md, "
+                f"\"Using API keys\").",
             ))
     if not (getattr(manifest, "connectors", None) or getattr(manifest, "secrets", None)):
         results.append(ok("no connectors or secrets are declared"))
+
+    # ── The app's own API keys ───────────────────────────────────────────────
+    declared_keys, key_problems, key_policy = app_secrets_problems(manifest_data)
+    for problem in key_problems:
+        results.append(bad(problem, "Pippa refuses the push until it is fixed. "
+                                    'docs/API_APPS.md, "Using API keys", has the rules.'))
+    for message in key_policy:
+        warn(message, "Pippa checks this again on every push and refuses it if the rule "
+                      'still holds. docs/API_APPS.md, "Using API keys", has the rules.')
+    if declared_keys and not key_problems:
+        results.append(ok(
+            f"app_secrets declares {', '.join(declared_keys)}: set "
+            f"{'its value' if len(declared_keys) == 1 else 'their values'} in Pippa, "
+            "Apps > Created by me > this app > Keys"
+        ))
+    for message, fix in env_read_warnings(ROOT, declared_keys):
+        warn(message, fix)
 
     # ── The app class is where the handler expects it ────────────────────────
     sys.path.insert(0, str(ROOT))
@@ -625,9 +906,37 @@ def main() -> int:
                 "picked. Five to ten is a good number.",
             ))
 
+    # ── No keys in the repository ────────────────────────────────────────────
+    #
+    # A key that reaches GitHub is a published key, and the build refuses a
+    # push that adds one. `.githooks/pre-commit` stops it before the commit;
+    # this is the same check over every tracked file, for a clone where the
+    # hook was never switched on. Only where, never the value.
+    if check_secrets is None:
+        warn("scripts/check_secrets.py is missing, so the repository was not checked for keys.",
+             "Copy it back from the template; ask an organiser if you do not have it.")
+    else:
+        found_keys = check_secrets.scan_tree(ROOT)
+        if found_keys is None:
+            print(f"{YELLOW}  --  not a git repository, so no files were checked for keys{PLAIN}",
+                  flush=True)
+        elif found_keys:
+            for finding in found_keys:
+                results.append(bad(f"{finding.where()}: {finding.kind}"))
+            print(f"       {YELLOW}Remove it and use app_secrets instead. If it was ever pushed, "
+                  f"rotate the key with the provider first.{PLAIN}", flush=True)
+            print(f"       {YELLOW}python scripts/check_secrets.py says more; "
+                  f"docs/API_APPS.md, \"Using API keys\".{PLAIN}", flush=True)
+        else:
+            results.append(ok("no file looks as if it holds a key"))
+
     # ── The tests ────────────────────────────────────────────────────────────
+    #
+    # Without the values from `.env`, as in the build: a test that only passes
+    # with your key would pass here and fail there.
     print(flush=True)
-    tests = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT)
+    tests = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT,
+                           env=environment_without(from_dot_env))
     results.append(
         ok("the tests pass") if tests.returncode == 0
         else bad("the tests fail", "Publishing runs them too, and will stop here.")

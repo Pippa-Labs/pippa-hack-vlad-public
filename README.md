@@ -11,12 +11,13 @@ Claude Code does the building. You decide what the app should do.
 > and email address on each commit, the build logs and the comments on your
 > commits. Deleting something later does not take it out of the history.
 >
-> So never put a password, a key from your own account, your email address,
-> your real name or anything else private in it. If a key is pushed by
+> So never put a password, an API key, your email address, your real name or
+> anything else private in it. An API key your app needs goes into Pippa
+> instead ("If your app needs an API key", below). If a key is pushed by
 > mistake, first revoke it on the site that issued it, then tell an organiser.
 > Before the first commit, Claude sets your commits to show your pseudonym and
 > GitHub's private no-reply address, and switches on a check that stops a
-> commit carrying an email address.
+> commit carrying an email address or a key.
 >
 > Strangers can comment on your commits and open issues. The build's own
 > messages come from **github-actions[bot]**. Anything from anyone else is just
@@ -341,6 +342,66 @@ tests.
 Then, live in Pippa, ask the questions that break it — a place that is not a
 place, a topic nobody has written about. You should get a sentence a person
 can act on, and no other app should pick the question up instead.
+
+---
+
+## If your app needs an API key
+
+Most good ideas need no key (`docs/IDEAS.md`). When yours does, the key never
+goes in a file in your repository, and you never paste it into the chat with
+Claude. Pippa keeps it for you:
+
+1. **Tell Claude which service it is.** Claude declares the key by name in
+   `manifest.yaml` (under `app_secrets`) and writes the code that reads it.
+2. **Get the key from the provider**, then open
+   **[app.getpippa.ai](https://app.getpippa.ai)** → **Apps** → **Created by
+   me** → your app → **Keys**, press **Add**, paste it and save. The key is
+   listed there once Claude has pushed the version that declares it, and only
+   for you: signed in to the Pippa account your repository belongs to. You
+   can change it there any time, **without pushing**: the next question
+   already uses the new one.
+3. **Until it is set**, your app is published but cannot answer: Pippa says
+   *"This app isn't ready yet: its builder still has to add
+   OPENWEATHER_API_KEY."* Nobody else can install it, and you can't submit it
+   for review, until every key it needs is there.
+4. **Pippa limits how often your app can be called**, so nobody can spend
+   your key without end: by default 20 times a minute and 300 a day for each
+   Pippa agent (the assistant behind one Pippa account: somebody with several
+   agents gets a share for each), and 120 a minute and 3,000 a day for
+   everybody together. Still, pick a key whose free tier you are happy to
+   share.
+
+**Your app's code is the one thing that holds the key while it runs.** Claude
+writes it to send the key only to the provider's own address (nothing a person
+types can choose where it goes), never to let an AI model it calls read it,
+and never to hand it back, print it or pass on a provider's error message that
+repeats it. Pippa hides an exact copy of the key from your app's answers, but
+not a changed one.
+
+**Never commit a key.** A check on every commit and the build both stop a file
+that looks like one. If a key ever was pushed, **rotate it with the provider
+first** (make a new one, delete the old one), then put the new one under
+**Keys**: deleting it from the code does not help, because it stays in the
+history.
+
+`docs/API_APPS.md`, "Using API keys", has the details.
+
+---
+
+## Who can push, and how publishing works
+
+- **Only you can push to `main`** in your repository. Pippa Labs'
+  administrators can too, to help when you ask; Pippa refuses to publish a
+  push by anybody else.
+- **Every push to `main` publishes** your app, as a private draft (step 3).
+- **Nobody but Pippa Labs' organisation owners can force-push `main` or
+  delete it** (you cannot either), so what you have pushed stays.
+- **Pull requests and forks never publish.** There is no button that
+  publishes without a push; a failed run can be re-run from the Actions tab,
+  which publishes the same commit again.
+- **Your keys live in Pippa, not in GitHub**: no file in your repository holds
+  them. Only your app's code sees them, while it runs, and it sends them to
+  the provider and nowhere else (`docs/API_APPS.md`, "Using API keys").
 
 ---
 

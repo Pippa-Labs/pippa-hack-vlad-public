@@ -611,10 +611,11 @@ app is built every time, and anything written last time is gone.
 Same reason. There is nowhere to put it.
 
 **"Directions from A to B."**
-Routing APIs that are any good need a paid key. Your repository is readable, so
-a key pasted into the code is a key you have published. Use a free, no-key API,
-or change the idea to something a free one answers — distance rather than
-directions, for instance.
+Routing APIs that are any good need a paid key. A key can now live in Pippa
+rather than in your code (docs/API_APPS.md, "Using API keys"), but every person
+who uses the app spends it, and a paid key can cost you money. Prefer a free,
+no-key API, or change the idea to something a free one answers — distance
+rather than directions, for instance.
 
 **"Scrape every listing on this site and compare them."**
 Fifty sequential requests will not finish in twenty seconds. The call is killed

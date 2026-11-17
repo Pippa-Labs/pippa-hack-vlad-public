@@ -75,6 +75,9 @@ class Repo:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": str(path.parent / "empty.gitconfig"),
             "LC_ALL": "C",
+            # The key check runs with the Python running these tests, whatever
+            # is on PATH. The fallback tests below set "none".
+            "PIPPA_HOOK_PYTHON": Path(sys.executable).as_posix(),
         }
         for name in [n for n in self.env if n.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))]:
             del self.env[name]
@@ -328,3 +331,111 @@ def test_a_name_ending_in_a_dot_matches(repo):
     """Some versions of git leave dots off the end of the name on a commit."""
     repo.git("config", "user.name", "Night Owl")
     assert repo.commit({"manifest.yaml": manifest('app_author_name: "Night Owl."')}).returncode == 0
+
+
+# ── Keys ─────────────────────────────────────────────────────────────────────
+#
+# No key is written out here: each is put together while the test runs, so
+# this file never looks like a leak itself.
+
+AWS_LIKE = "AKIA" + "J7Q2" + "M4XZ" + "8B3K" + "P6TW"
+HEX_KEY = "".join("0a1b2c3d4e5f6a7b8c9d"[i % 20] for i in range(7, 39))
+
+
+@needs_git
+def test_a_key_in_a_staged_file_is_stopped_and_never_shown(repo):
+    done = repo.commit({"app.py": f'import os\nWEATHER_API_KEY = "{HEX_KEY}"\n'})
+    assert done.returncode != 0
+    assert "looks as if it holds a key" in done.stderr
+    assert "app.py:2: a key-like value given to WEATHER_API_KEY" in done.stderr
+    assert "rotate" in done.stderr
+    assert "email address or a real name" not in done.stderr
+    assert HEX_KEY not in done.stderr + done.stdout
+    assert repo.git("rev-parse", "--verify", "-q", "HEAD").returncode != 0
+
+
+@needs_git
+def test_the_hook_finds_python_on_path_by_itself(repo):
+    del repo.env["PIPPA_HOOK_PYTHON"]
+    repo.env["PATH"] = os.pathsep.join([str(Path(sys.executable).parent), repo.env.get("PATH", "")])
+    done = repo.commit({"app.py": f'WEATHER_API_KEY = "{HEX_KEY}"' + chr(10)})
+    assert done.returncode != 0
+    assert "app.py:1: a key-like value given to WEATHER_API_KEY" in done.stderr
+
+
+@needs_git
+def test_reading_the_key_from_the_environment_goes_through(repo):
+    done = repo.commit({"app.py": 'import os\nkey = os.environ["WEATHER_API_KEY"]\n',
+                        ".env.example": "WEATHER_API_KEY=\n"})
+    assert done.returncode == 0, done.stderr
+
+
+@needs_git
+def test_a_test_value_marked_with_the_pragma_goes_through(repo):
+    line = f'FIXTURE_TOKEN = "{HEX_KEY}"  # pragma: allowlist secret\n'
+    done = repo.commit({"test_x.py": line})
+    assert done.returncode == 0, done.stderr
+
+
+@needs_git
+def test_the_pragma_never_lets_a_providers_key_through(repo):
+    line = f'FIXTURE = "{AWS_LIKE}"  # pragma: allowlist secret\n'
+    done = repo.commit({"test_x.py": line})
+    assert done.returncode != 0
+    assert "test_x.py:1: an AWS access key id" in done.stderr
+    assert AWS_LIKE not in done.stderr + done.stdout
+
+
+@needs_git
+def test_a_key_in_a_commented_line_of_env_example_is_stopped(repo):
+    """The template's `.env.example` has `# OPENWEATHER_API_KEY=`; filling
+    it in without taking the `#` off must not commit the key."""
+    done = repo.commit({".env.example": f"# What the app reads.\n# OPENWEATHER_API_KEY={HEX_KEY}\n"})
+    assert done.returncode != 0
+    assert ".env.example:2: a value for OPENWEATHER_API_KEY" in done.stderr
+    assert HEX_KEY not in done.stderr + done.stdout
+    done = repo.commit({".env.example": f"# token {AWS_LIKE}\n"})
+    assert done.returncode != 0
+    assert ".env.example:1: an AWS access key id" in done.stderr
+
+
+@needs_git
+def test_a_dot_env_file_is_stopped(repo):
+    done = repo.commit({".env": "WEATHER_API_KEY=test-key-000000000000000000\n"})
+    assert done.returncode != 0
+    assert ".env: an environment file" in done.stderr
+
+
+@needs_git
+def test_without_python_the_providers_formats_are_still_stopped(repo):
+    repo.env["PIPPA_HOOK_PYTHON"] = "none"
+    done = repo.commit({"notes.md": f"one\nkey {AWS_LIKE}\n"})
+    assert done.returncode != 0
+    assert "notes.md:2: a provider's key format" in done.stderr
+    assert "Python was not found" in done.stderr
+    assert AWS_LIKE not in done.stderr + done.stdout
+
+
+@needs_git
+def test_without_python_placeholders_go_through(repo):
+    repo.env["PIPPA_HOOK_PYTHON"] = "none"
+    text = "AKIA" + "X" * 16 + "\n" + "AKIA" + "IOSFODNN7" + "EXAMPLE" + "\n"
+    done = repo.commit({"notes.md": text})
+    assert done.returncode == 0, done.stderr
+
+
+@needs_git
+def test_without_python_the_pragma_does_not_let_a_providers_key_through(repo):
+    repo.env["PIPPA_HOOK_PYTHON"] = "none"
+    done = repo.commit({"notes.md": f"x\n{AWS_LIKE} # pragma: allowlist secret\n"})
+    assert done.returncode != 0
+    assert "notes.md:2: a provider's key format" in done.stderr
+
+
+@needs_git
+def test_without_python_a_dot_env_file_is_still_stopped(repo):
+    repo.env["PIPPA_HOOK_PYTHON"] = "none"
+    done = repo.commit({"config/.env.local": "X=1\n", ".env.example": "WEATHER_API_KEY=\n"})
+    assert done.returncode != 0
+    assert "config/.env.local: a file that holds keys" in done.stderr
+    assert ".env.example" not in done.stderr

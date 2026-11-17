@@ -1,9 +1,10 @@
 name: Publish to Pippa
 
+# Only a push to main publishes. Pull requests, forks and manual runs never
+# do: Pippa checks that the run was a push, and refuses anything else.
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: write

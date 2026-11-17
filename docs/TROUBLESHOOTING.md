@@ -736,9 +736,9 @@ managed by the organisers. Do not edit it: a push that changes it still goes
 through, but Pippa only accepts a publish from the organisers' workflow,
 unchanged, so an edited workflow cannot publish the app.
 
-**The fix.** Do not change the code. You may re-run the workflow once
-yourself (Claude does not): Actions tab, **Publish to Pippa** on the left,
-**Run workflow** on the right. If it fails again, show an organiser the
+**The fix.** Do not change the code. You may re-run it once yourself
+(Claude does not): Actions tab, open the failed **Publish to Pippa** run,
+**Re-run jobs**, **Re-run all jobs**. If it fails again, show an organiser the
 reference from the message. A run that ended with no `pippa/publish` status and
 no comment on the commit counts as the same thing, unless its summary says
 **Nothing to publish yet**: that is the placeholder app id or an empty
@@ -787,12 +787,10 @@ declared without its connector:
 
 **The fix.** Both blocks come out of `manifest.yaml` entirely, and the idea has
 to change so it does not need an account. The app can still call the public
-internet: an API that needs no key, or one with a demo key its provider
-publishes for everyone, such as NASA's `DEMO_KEY`. Never a key tied to your
-own account, not even a free one — the repository is public, and a key you
-delete stays in the git history. If a key has been pushed, revoke it with the
-provider first, then tell an organiser. The no-key APIs in `docs/IDEAS.md`
-avoid the problem altogether, and `docs/API_APPS.md` has the details.
+internet. If a service needs **the app's own** API key, that is not a
+`secrets:` block: declare it under `app_secrets:` and set its value in Pippa
+(see [API keys](#api-keys)). Never put the key itself in a file. The no-key
+APIs in `docs/IDEAS.md` avoid the question altogether.
 
 ## `Pippa refused to publish this app:` ... `is waiting for review, so its code can't change`
 
@@ -899,6 +897,188 @@ button on the Apps page, which you press yourself and which only takes one
 version out of the review queue.
 
 **The fix.** Ask an organiser.
+
+---
+
+# API keys
+
+An app that needs its own key declares it under `app_secrets:` in
+`manifest.yaml`, reads it with `os.environ["NAME"]` inside `handle()`, and the
+value is set in Pippa: **Apps**, **Created by me**, the app, **Keys**.
+`docs/API_APPS.md`, "Using API keys", is the whole story.
+
+## `Commit stopped: a file you are committing looks as if it holds a key.`
+
+```
+Commit stopped: a file you are committing looks as if it holds a key.
+This looks like a key, a token or a password:
+  app.py:12: a key-like value given to OPENWEATHER_API_KEY
+```
+
+**What it means.** The commit check (`.githooks/pre-commit`, which runs
+`scripts/check_secrets.py`) found what looks like a key in a staged file, or a
+file that holds keys by its nature, such as `.env` or a `.pem`. It names the
+file and the line, never the value. Nothing was committed.
+
+**The fix.** Take the value out of the file: declare the key under
+`app_secrets`, read it with `os.environ`, put the value in `.env` on your
+computer and under **Keys** in Pippa. Stage the file again and commit. Never
+use `--no-verify`. If the value is genuinely not a key (a fake value in a
+test), end the line with `# pragma: allowlist secret`; that does not work for
+a key in a provider's own format (AWS, GitHub, OpenAI, ...) or a private key,
+which is always a real one. If a staged file is
+`.env`, unstage it: `git restore --staged .env`.
+
+## `FAIL app.py:12: a key-like value given to OPENWEATHER_API_KEY`
+
+The same finding from `scripts/check.py`, which checks every file git tracks,
+so it also covers a copy of the repository where the commit check was never
+switched on. The build stops here too, and publishes nothing.
+
+**The fix.** As above. **If that commit was ever pushed, the key is already
+in the history**, where anyone who can read the repository can find it.
+Rotate it with the provider first (make a new key, delete the old one), set
+the new one under **Keys**, then remove the old one from the code. The repository is public: assume the key has been copied.
+
+## `a value that looks like a key was committed in app.py:12`
+
+The build's own scan of the commits you pushed found a key. Nothing was
+published. The key **was pushed**, so do the rotation above first, then remove
+it from the code and push again. The message never shows the value.
+
+## `FAIL app_secrets[0].name is 'openweather': it must be capital letters, digits and underscores, 3 to 64 characters, starting with a letter (like OPENWEATHER_API_KEY).`
+
+**What it means.** An entry under `app_secrets` breaks one of the rules, and
+Pippa would refuse the push. The others you may see:
+
+- `... is reserved for the platform the app runs on`: names starting
+  `PIPPA_`, `AWS_`, `LAMBDA_` or `OTEL_`, and system names such as `PATH` or
+  `HOME`, belong to the platform. Choose another, such as one starting with the
+  service's name.
+- `... is declared twice`, `... needs a description`, `... has a description
+  of 230 characters; at most 200`, `... required must be true or false`,
+  `app_secrets declares 21 keys; an app may declare at most 20`.
+- `... has scope: user`: keys that each user provides are not available yet.
+  Leave `scope` out, or set it to `app`.
+
+**The fix.** Change the entry as the message says, and push again.
+
+## `WARN the app reads GIPHY_KEY (app.py:31), but manifest.yaml does not declare it under app_secrets`
+
+**What it means.** The code reads an environment variable that the manifest
+does not declare. Pippa only gives the app the keys it declares, so in Pippa
+it will be missing (on your computer it may still be in `.env`, which is why
+it can work here). It is a warning: the push still publishes.
+
+**The fix.** Declare it under `app_secrets`, with a description, and set its
+value under **Keys**.
+
+## `WARN OPENWEATHER_API_KEY is read when app.py is imported (app.py:8), not in a call`
+
+**What it means.** The key is read at the top of a file, when the module is
+loaded. Pippa puts the key in `os.environ` for each call only, so at that
+moment it is not there yet, and the app sees nothing.
+
+**The fix.** Move the `os.environ` line inside `handle()`, or a method it
+calls.
+
+## `Published, but it can't run until you add OPENWEATHER_API_KEY in Created by me.`
+
+**What it means.** The push published, but a key the app declares as
+`required` has no value yet. Until it does, Pippa does not call the app:
+whoever asks gets *"This app isn't ready yet: its builder still has to add
+OPENWEATHER_API_KEY."*, nobody else can install it, and it cannot be submitted
+for review.
+
+**The fix.** No push needed. Open Pippa, **Apps**, **Created by me**, the app,
+**Keys**, and set the value. The next question uses it.
+
+## `This app isn't ready yet: its builder still has to add OPENWEATHER_API_KEY.`
+
+What a person sees in the chat while a required key has no value: see the
+entry above. Setting the key under **Keys** fixes it at once, for every
+version of the app that declares it. A version published before the app
+changed hands says something else ("This version was published before the
+app changed hands", below).
+
+## The key is set, but the app still says it is missing
+
+- **The name must match exactly**, in capitals: the one under
+  `app_secrets` in `manifest.yaml`, the one under **Keys**, and the one in
+  `os.environ["..."]`.
+- **The version that answers must declare it.** Pippa hands an app only the
+  keys the published version's manifest declares. A version published before
+  you added the `app_secrets` entry does not get it: push, and make sure the
+  new version is the one installed (the badge names the version).
+- **Read it inside `handle()`**, not at the top of a file (above).
+
+## There is no **Keys** section on my app's card
+
+- **No published version declares a key yet.** A key is listed under
+  **Keys** once a version that declares it under `app_secrets` is published.
+  Push first: the push publishes without the value.
+- **You are signed in with another account.** Only the Pippa account the
+  repository belongs to sees **Keys**, and only it can set them. See "My app
+  published and I cannot find it in the Apps list", below.
+
+## `This app has had a lot of requests in the last minute; try again in a minute.`
+
+**What it means.** Pippa limits how often an app can be called: by default
+20 times a minute and 300 times a day for each Pippa agent that calls it
+(the assistant behind one Pippa account), and 120 times a minute and 3,000
+times a day for the app from everybody together, its builder included. The
+first limit is per agent, not per person: somebody with several Pippa agents
+gets a share for each. Over a limit Pippa does not call the app at all.
+Nothing is wrong with the app, and a call Pippa did not run is not counted.
+
+**The fix.** Wait for the next minute. If real use needs more, ask an
+organiser: Pippa Labs can raise one app's limits. Never make the app retry,
+or call itself, to get round them.
+
+## `This app has had a lot of requests today; try again tomorrow.`
+
+The same, for the daily limits. They start again at midnight UTC.
+
+## `This app can't run right now. Try again in a little while.`
+
+**What it means.** Pippa could not read the app's keys, a fault on Pippa's
+side, so it did not call the app. Nothing in the app causes it.
+
+**The fix.** None in the repository, and no push helps. If it lasts, tell an
+organiser when it happened.
+
+## `This app can't run right now because Pippa can't count its requests. Try again in a little while.`
+
+**What it means.** Pippa counts the calls to every app (the limits above).
+This time it could not count the call, a fault on Pippa's side. An app with
+no key set runs anyway, but an app that has a key set is not called, so
+that nobody can spend the key without a limit. Nothing in the app causes it.
+
+**The fix.** None in the repository, and no push helps. If it lasts, tell an
+organiser when it happened.
+
+## `This version was published before the app changed hands; its builder must publish again.`
+
+**What it means.** An app's keys go only to a version published by its
+current owner, from its current repository. This version was published
+before one of those changed: Pippa Labs moved the app, or re-linked its
+repository, to another Pippa account, or the repository was renamed, which
+changes the app id. Every key was deleted in the change, and versions
+published before the change get no keys, so Pippa does not run this one at
+all. Nothing in its code causes it.
+
+**The fix.** For the app's owner now: set its keys again under **Keys**,
+push a version of your own, and make sure it is the one installed (the badge
+names the version). If the repository was renamed, it publishes a new app id
+from now on: set `app.id` to it first ("The app id and the author name",
+above), push, and set the keys on that app's card.
+
+## `Pippa refused to publish this app:` ... `app_secrets`
+
+**What it means.** Pippa refused the declaration itself. Most often one of the
+rules above (the build's check names it first). If the message says API keys
+are not available, Pippa has not switched them on yet: no change to the app
+fixes that. Tell an organiser, with the commit link.
 
 ---
 
@@ -1417,10 +1597,12 @@ version, as above.
 Open the Publish step of the run and read the `Packaged N file(s)` list. It
 names every file that was sent.
 
-**6. Re-publish without a commit.**
-Actions tab, **Publish to Pippa** on the left, **Run workflow** on the right.
-That publishes the current state of `main` again, under the version number in
-`manifest.yaml`. So it works only while that version is a draft: a version you
+**6. Re-publish without a change.**
+Actions tab, open the newest **Publish to Pippa** run, **Re-run jobs**,
+**Re-run all jobs**; or ask Claude to push an empty commit
+(`git commit --allow-empty -m "Publish again"`). Only a push to `main`
+publishes, so there is no other button. Either way it publishes `main` again,
+under the version number in `manifest.yaml`. So it works only while that version is a draft: a version you
 have submitted is refused, like any other push of it.
 
 **7. If the thing you changed was routing**, remember routing comes from the

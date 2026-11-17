@@ -153,42 +153,263 @@ raise error
 
 ---
 
-## API keys: read this before you pick an idea
+## Using API keys
 
-**There is no secret store available to you.** A hackathon app may not declare
-`secrets:` or `connectors:` — registration refuses any app that does — and
-nothing injects a value at deploy time. Your repository is the only place a
-key could live, and your repository is readable.
+**Prefer an API that needs no key.** Almost every idea in `IDEAS.md` uses
+one, and it is one less thing to go wrong. When the idea needs a key, the key
+never goes in a file in this repository: Pippa keeps it for you, and hands it
+to your app on each call.
 
-So there are exactly three honest options:
+**This repository is public**, so this matters more here than anywhere: a key
+in any file, even for one commit, is a key anyone can copy, for good. With
+`app_secrets` the key never comes near the repository.
 
-1. **Use a no-key API.** Almost every idea in `IDEAS.md` does. This is the
-   right answer nearly every time.
-2. **Use a public demo key**, where the provider publishes one on purpose.
-   NASA's `DEMO_KEY` is the clear example: it belongs to nobody, it is in
-   their documentation, and leaking it costs nothing. Put it in one named
-   constant with a comment saying exactly that.
-3. **Change the idea.** If it only works with a real key, it does not work
-   here.
+### 1. Declare it in `manifest.yaml`
 
-```python
-#: NASA's public demo key, published in their own documentation. It belongs to
-#: nobody and is rate limited to 30 requests an hour per IP, shared. It is in
-#: this file deliberately: there is no secret store for a hackathon app, and a
-#: key in a readable repository is a published key.
-#:
-#: A REAL key would not be safe here. If your app needs one, the idea needs
-#: changing — not the hiding place.
-NASA_API_KEY = "DEMO_KEY"
+By name, with one sentence saying what it is for. Never the value.
+
+```yaml
+app_secrets:
+  - name: OPENWEATHER_API_KEY
+    description: "OpenWeather key, used to look up the forecast"
+    required: true          # true unless the app can answer without it
 ```
 
-Never paste a personal key, a key tied to billing, or a key you would mind
-seeing on a screen behind you. Your repository is public: anyone can read it,
-and a key you delete stays in the git history. If a key is ever pushed, revoke
-it with the provider first — deleting it from the code does not make it safe —
-then tell an organiser.
+The rules, which the check and Pippa both apply:
 
-Test what happens without it. Verified against `api.nasa.gov`:
+- The name is capital letters, digits and underscores, 3 to 64 characters,
+  starting with a letter. It may not start with `PIPPA_`, `AWS_`, `LAMBDA_` or
+  `OTEL_`, and may not be a name the system uses (`PATH`, `HOME`, `TZ`, ...).
+- `description` is required, at most 200 characters. Reviewers and your Keys
+  page show it.
+- `scope` is `app` (the default; you may leave it out). One key per app,
+  shared by every call. Keys that each user brings are not available yet.
+- At most 20 keys per app, each value at most 4 KB.
+- It is `app_secrets:`, not `secrets:`. A `secrets:` block asks a *user* for
+  their credentials, and registration refuses it.
+
+### 2. Read it inside `handle()`
+
+```python
+import os
+import urllib.parse
+
+from pippa_agentapp_sdk import AgentAppError, Call, Result
+
+
+class KeyMissing(AgentAppError):
+    """The app's API key is not set, so it cannot call the service."""
+
+    user_message = "This app isn't set up yet: its builder still has to add its API key."
+    retryable = False
+
+
+class App:
+    ...
+
+    def handle(self, call: Call) -> Result:
+        # Here, not at the top of the file: Pippa puts the key in os.environ
+        # for each call, and it is not there while the module is imported.
+        key = os.environ.get("OPENWEATHER_API_KEY", "")
+        if not key:
+            raise KeyMissing(
+                "OPENWEATHER_API_KEY is not set: put it in .env on your computer, "
+                "or under Keys on the app's card in Pippa"
+            )
+        place = call.inputs.get("place", "")
+        # The address is written here, in full: the question's words only ever
+        # go into the query's values, so nobody can choose where the key goes.
+        query = urllib.parse.urlencode({"q": place, "appid": key, "units": "metric"})
+        # Never put the key, this URL or the provider's error text in an error
+        # message, a narrative or a print(): Pippa hides an exact copy of the
+        # key, not every form of it ("Keep the key between your app and the
+        # provider", below).
+        raw = self._fetch("https://api.openweathermap.org/data/2.5/weather?" + query)
+        ...
+```
+
+And test both cases. `monkeypatch` sets or removes the key for one test only,
+and the fake value is obviously fake:
+
+```python
+def test_a_missing_key_is_said_plainly(monkeypatch):
+    monkeypatch.delenv("OPENWEATHER_API_KEY", raising=False)
+    with pytest.raises(KeyMissing):
+        call({"place": "Leeds"})
+
+
+def test_the_forecast_is_read(monkeypatch):
+    monkeypatch.setenv("OPENWEATHER_API_KEY", "test-key-000000000000000000")
+    ...
+```
+
+### 3. Set the value in Pippa
+
+**Only the app's owner can do this:** the Pippa account this repository was
+created for. Signed in as anybody else (a tester, a reviewer, another of your
+accounts) there is no **Keys** section, and nobody who uses the app is ever
+asked for your key. Until the owner has saved a value, the app has no key, and
+Pippa does not call it while the key is `required` ("If a key is missing",
+below).
+
+Push the version that declares the key first: it publishes without the value.
+Then open **https://app.getpippa.ai**, **Apps**, **Created by me**, your app's
+card, **Keys**. A key is listed there once a published version declares it.
+Press **Add**, paste the value and save. Pippa stores it encrypted, never
+shows it again (only its last four characters, for a key of 16 characters or
+more), and never writes it to GitHub, the build or its own logs.
+
+- **Rotate any time, without a push.** Save a new value and the very next
+  call uses it, on every version of the app that declares it: drafts, the
+  version testers have and the approved one. Deleting it works the same way.
+- **The keys belong to the app's owner and its repository, not to its
+  code.** Every key is deleted when Pippa Labs moves the app, or re-links
+  its repository, to another Pippa account, and when the repository is
+  renamed: the app id changes with the name, so the old id's keys are
+  deleted and the new id starts with none. The owner then adds them again.
+  A version published before the change gets no keys: Pippa does not run
+  it, and the person asking is told *"This version was published before the
+  app changed hands; its builder must publish again."* The owner pushes a
+  version of their own, and that is the one people should have.
+- **Pippa limits how often an app can be called**, so nobody can spend your
+  key's quota without end. By default each Pippa agent (the assistant behind
+  one Pippa account) can call an app 20 times a minute and 300 times a day,
+  and the app takes at most 120 calls a minute and 3,000 a day from everybody
+  together, you included; Pippa Labs can set different limits for one app.
+  The first limit is per agent, not per person: somebody with several Pippa
+  agents gets a share for each, up to the app's own limit. Over a limit
+  Pippa does not call the app, and the person is told *"This app has had a
+  lot of requests in the last minute; try again in a minute."* or *"This app
+  has had a lot of requests today; try again tomorrow."* A call Pippa does
+  not run (over a limit, with a key missing, or for any other reason here)
+  is not counted.
+- Even so, every person who uses your app spends that key's quota. Pick a key
+  whose free tier you are happy to share, and set a spending cap with the
+  provider if it offers one.
+
+### 4. On your computer: `.env`
+
+Nothing in this template runs on your computer (the build runs the checks
+and the tests), so you rarely need one. If you do run the app here, you make
+`.env` yourself, once, in the repository's folder, and type the values in. It
+replaces a `.env` that is already there, so only when you have none:
+
+```
+cp .env.example .env        # macOS, Linux or Git Bash
+copy .env.example .env      # Windows
+```
+
+Claude gives you that command and never runs it, and never needs to see the
+values. `.claude/settings.json` stops Claude Code's file tools reading,
+writing or creating `.env` and its copies (any other `.env.*` file but
+`.env.example`, `.env~`, `.env - Copy`, `.env-*`, `.env_*`, `.envrc`), and
+`CLAUDE.md` tells Claude never to open or make it from the shell either,
+which no setting can fully stop.
+
+`.gitignore` keeps `.env` out of every commit; `.env.example`, which is
+committed, lists the same names with no values. Never put a value anywhere
+else: this repository is public.
+
+### If a key is missing
+
+- **Publishing still works.** A push never fails only because a key has no
+  value yet; the commit comment says *"Published, but it can't run until you
+  add OPENWEATHER_API_KEY in Created by me."*
+- **Pippa does not call the app** while a `required: true` key is missing. The
+  person asking sees *"This app isn't ready yet: its builder still has to add
+  OPENWEATHER_API_KEY."*
+- **Nobody else can install it, and it cannot be submitted for review,** until
+  every required key is set.
+- A key declared `required: false` is simply absent from `os.environ`: your
+  code decides what to do without it.
+- **If Pippa cannot read the keys** (a fault on Pippa's side), it does not
+  call the app either, and the person is told *"This app can't run right now.
+  Try again in a little while."* Nothing in the app causes it, and no push
+  fixes it.
+- **If Pippa cannot count the calls** (also a fault on Pippa's side), it does
+  not call an app that has a key set, so that nobody spends your key
+  uncounted, and the person is told *"This app can't run right now because
+  Pippa can't count its requests. Try again in a little while."* An app with
+  no key set runs as usual. Again, no push fixes it.
+
+### Keep the key between your app and the provider
+
+While your app runs, its code is the one thing that holds the key. Pippa
+cannot see what the code does with it, so these four are up to you:
+
+1. **Never let the question choose where the key is sent.** Write the
+   provider's address into the code, in full. Nothing from the question, or
+   from any other input, may decide the host, the URL, a redirect to follow
+   or the header the key goes in. The question's words go only into the
+   values of the query (`urlencode`) or into one quoted path segment
+   (`quote(..., safe="")`) after that fixed address. An app that fetches an
+   address the person typed must never send the key with it.
+
+   A key that goes in a header must not follow a redirect either. Python's
+   `urllib` sends every header given to `Request(headers=...)` or
+   `add_header()` on to whatever address a redirect names, another host
+   included, and `Authorization` with them. Attach the key with
+   `add_unredirected_header`, which stays with the first request only:
+
+   ```python
+   def _fetch(self, url: str, key: str, timeout: float = 6.0) -> bytes:
+       request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+       # Never in headers= or add_header(): those follow a redirect anywhere.
+       request.add_unredirected_header("Authorization", f"Bearer {key}")
+       with urllib.request.urlopen(request, timeout=timeout) as response:
+           return response.read()
+   ```
+
+   Or refuse redirects outright, so that a `3xx` is an error like any other.
+   It arrives as an `HTTPError` with the status in `.code`, which the
+   `except` in "Catch `HTTPError` before `URLError`" already handles:
+
+   ```python
+   class _NoRedirect(urllib.request.HTTPRedirectHandler):
+       def redirect_request(self, req, fp, code, msg, headers, newurl):
+           return None  # the opener raises HTTPError instead of following it
+
+   _OPENER = urllib.request.build_opener(_NoRedirect)
+   # In _fetch: with _OPENER.open(request, timeout=timeout) as response:
+   ```
+
+2. **Never give a model or a tool a way to read the environment.** If your app
+   asks a language model for anything, give it no tool that can read
+   `os.environ` or a file, run code, or fetch an address it chooses, and never
+   put the key in a prompt. A model can be talked into repeating whatever it
+   can reach.
+3. **Never return, print or log a key, in any form.** Pippa hides an exact
+   copy of a key, and its URL-encoded copy, in what your app returns (`data`,
+   the `narrative`, `warnings`, error messages) and in what it prints. It
+   does not recognise the key in any other form: base64 (as in a `Basic`
+   sign-in header), split in two, reversed, in lower-case `%xx`, JSON-escaped
+   or only its first part. Those reach the person asking, word for word.
+4. **Never pass on a provider's error.** Some services repeat the request in
+   their error messages and response bodies, the URL with your key in it, or
+   the key itself, sometimes encoded. Never put a provider's error text, its
+   response body or the request URL in a `user_message`, `narrative`, `data`,
+   `warnings` or a log line. Say what happened in your own words, from the
+   status code, as in "Catch `HTTPError` before `URLError`", above.
+
+### Never commit a key
+
+The commit check (`.githooks/pre-commit`), `scripts/check.py` and the build
+all look for keys in your files and stop the commit or the publish, naming the
+file and line but never the value. A line that only looks like a key, such as
+a made-up test value, can end with `# pragma: allowlist secret`. That comment
+never lets through a key in a provider's own format (AWS, GitHub, OpenAI,
+Slack and so on) or a private key: no test needs a real one. `.env.example`
+is checked too, commented lines included, because it is committed.
+
+**If a key was ever committed and pushed, rotate it with the provider first**
+(make a new one, delete the old one), then set the new one under Keys.
+Deleting it from the code is not enough: it stays in the git history, where
+anyone who can read the repository can find it.
+
+A provider's public demo key is the one exception: NASA's `DEMO_KEY` belongs
+to nobody, is in their own documentation, and may sit in the code as a named
+constant with a comment saying so. Its limits are tight (above): 30 requests
+an hour per IP, shared. Tested against `api.nasa.gov`:
 
 | | |
 |---|---|

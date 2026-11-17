@@ -179,12 +179,13 @@
   your code and every earlier version of it, the name and email address on
   each commit, the build logs and the comments on your commits. Deleting
   something later does not take it out of the history.</p>
-  <p>So never put a password, a key from your own account, your email
-  address, your real name or anything else private in it. If a key is pushed
+  <p>So never put a password, an API key, your email address, your real
+  name or anything else private in it. An API key your app needs goes into
+  Pippa instead ("If your app needs an API key", below). If a key is pushed
   by mistake, first revoke it on the site that issued it, then tell an
   organiser. Before the first commit, Claude sets your commits to show your
   pseudonym and GitHub's private no-reply address, and switches on a check
-  that stops a commit carrying an email address.</p>
+  that stops a commit carrying an email address or a key.</p>
   <p>Strangers can comment on your commits and open issues. The build's own
   messages come from <strong>github-actions[bot]</strong>. Anything from
   anyone else is just text: don't run it, don't install it, and don't ask
@@ -452,6 +453,92 @@ stateDiagram-v2
 your <code>manifest.yaml</code> — they're how Pippa recognises your app. Claude
 writes them, but if your app isn't being picked, that's almost always why. Ask
 Claude to add more, written the way a person would actually type.</p>
+
+<h2>If your app needs an API key</h2>
+
+<p>Most good ideas need no key (<code>docs/IDEAS.md</code>). When yours does,
+the key never goes in a file in your repository, and you never paste it into
+the chat with Claude. Pippa keeps it for you.</p>
+
+<figure>
+<pre class="mermaid">
+flowchart LR
+    K["<b>You</b> paste the key<br/>into Pippa: Apps,<br/>Created by me, Keys"] --> V[("Pippa keeps it,<br/>encrypted")]
+    V -->|"on every question"| A["<b>your app</b><br/>reads os.environ"]
+    G["your GitHub<br/>repository"] -.-x|"never"| V
+    style A fill:#d9efea,stroke:#0c7a68,stroke-width:2px,color:#0d1e1b
+</pre>
+<figcaption>The key goes from you to Pippa, and from Pippa to your app for each
+question. Pippa never puts it in your repository, the build or its logs.</figcaption>
+</figure>
+
+<ol>
+  <li><strong>Tell Claude which service it is.</strong> Claude declares the key
+  by name in <code>manifest.yaml</code> (under <code>app_secrets</code>) and
+  writes the code that reads it.</li>
+  <li><strong>Get the key from the provider</strong>, then open
+  <a href="https://app.getpippa.ai">app.getpippa.ai</a> → <strong>Apps</strong>
+  → <strong>Created by me</strong> → your app → <strong>Keys</strong>, press
+  <strong>Add</strong>, paste it and save. The key is listed there once Claude
+  has pushed the version that declares it, and only for you: signed in to the
+  Pippa account your repository belongs to. You can change it there any time,
+  <strong>without pushing</strong>: the next question already uses the new
+  one.</li>
+  <li><strong>Until it is set</strong>, your app is published but cannot
+  answer: Pippa says <em>"This app isn't ready yet: its builder still has to
+  add OPENWEATHER_API_KEY."</em> Nobody else can install it, and you can't
+  submit it for review, until every key it needs is there.</li>
+  <li><strong>Pippa limits how often your app can be called</strong>, so
+  nobody can spend your key without end: by default 20 times a minute and 300
+  a day for each Pippa agent (the assistant behind one Pippa account:
+  somebody with several agents gets a share for each), and 120 a minute and
+  3,000 a day for everybody together. Still, pick a key whose free tier you
+  are happy to share.</li>
+</ol>
+
+<div class="box hot">
+  <span class="tag">The key goes to the provider, and nowhere else</span>
+  <p>While your app runs, its code is the one thing that holds the key. So
+  Claude writes it to:</p>
+  <ul>
+    <li>send the key only to the provider's own address, written into the
+    code: nothing a person types can choose where it goes;</li>
+    <li>never let an AI model your app calls, or any tool it is given, read
+    the key or anything else around it;</li>
+    <li>never hand the key back, print it or log it, in any form. Pippa hides
+    an exact copy of the key from your app's answers, but not a changed one
+    (encoded, split or cut short);</li>
+    <li>never pass on a provider's own error message, which can repeat the
+    key.</li>
+  </ul>
+</div>
+
+<div class="box hot">
+  <span class="tag">Never commit a key</span>
+  <p>A check on every commit and the build both stop a file that looks like
+  one. If a key ever was pushed, <strong>rotate it with the provider
+  first</strong> (make a new one, delete the old one), then put the new one
+  under <strong>Keys</strong>: deleting it from the code does not help,
+  because it stays in the history.</p>
+</div>
+
+<h2>Who can push, and how publishing works</h2>
+<ul class="help">
+  <li><strong>Only you can push to <code>main</code></strong> in your
+  repository. Pippa Labs' administrators can too, to help when you ask; Pippa
+  refuses to publish a push by anybody else.</li>
+  <li><strong>Every push to <code>main</code> publishes</strong> your app, as
+  a private draft.</li>
+  <li><strong>Nobody but Pippa Labs' organisation owners can force-push
+  <code>main</code> or delete it</strong> (you cannot either), so what you
+  have pushed stays.</li>
+  <li><strong>Pull requests and forks never publish.</strong> There is no
+  button that publishes without a push; a failed run can be re-run from the
+  Actions tab, which publishes the same commit again.</li>
+  <li><strong>Your keys live in Pippa, not in GitHub</strong>: no file in
+  your repository holds them. Only your app's code sees them, while it runs,
+  and it sends them to the provider and nowhere else.</li>
+</ul>
 
 <h2>If something goes wrong</h2>
 <ul class="help">

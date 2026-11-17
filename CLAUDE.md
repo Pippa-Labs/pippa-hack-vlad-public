@@ -29,7 +29,8 @@ are worth opening and are not repeated here:
   actually get used.
 - `docs/API_APPS.md` — **read this before writing any app that calls an API.**
   Measured latencies, the failure that actually happens (a 200 containing
-  nothing), User-Agent, rate limits, and why there is nowhere to put a key.
+  nothing), User-Agent, rate limits, and how to use an API key without
+  putting it in any file.
 - `docs/TROUBLESHOOTING.md` — every build error, by its exact text.
 - `docs/HOW_PIPPA_APPS_WORK.md` — what happens between a question and your code.
 - `docs/REVIEW_AND_SHARING.md` — **read this before you tell anybody their app
@@ -253,7 +254,7 @@ Two files at the top level, and the names matter:
 | `call.context.now` | Current time, timezone-aware. **Use this, never `datetime.now()`** |
 | `call.context.request_id` | An id for logging |
 | `call.context.explicit` | `True` when the person picked your app by name (`@YourApp`), so Pippa did not choose it. Read it as `getattr(call.context, "explicit", False)` — see below |
-| `call.secrets` | A `SecretBundle`. Always empty here |
+| `call.secrets` | A `SecretBundle`. Always empty here: your app's own API keys arrive in `os.environ` (see "API keys" below) |
 
 It returns `Result(data={...}, narrative="...")`. `data` must match the
 outcome's declared `output` exactly — every declared field present, nothing
@@ -427,7 +428,8 @@ The build enforces these and names the one you broke.
   refuses a push that breaks either.
 - **`persistence: none`.** Do not change it.
 - **No `connectors:` and no `secrets:` blocks.** Those ask for a real user's
-  credentials, and registration refuses any app that declares them.
+  credentials, and registration refuses any app that declares them. The app's
+  own API keys go under `app_secrets:` instead ("API keys", below).
 - **No database, no file writes, no state between calls.**
 - **20 seconds** per call, maximum.
 - **Python 3.12 standard library only**, plus `pippa_agentapp_sdk` and
@@ -437,14 +439,114 @@ The build enforces these and names the one you broke.
 - `app.name` and `app_author_name` may not contain "pippa", "official" or
   "verified".
 
-Apps **can** call public HTTP APIs, with one strict rule for keys — the same
-one as `docs/API_APPS.md`. Use an API that needs no key, or a demo key the
-provider publishes for everyone (NASA's `DEMO_KEY`). **Never a key tied to
-anyone's own account**, not even a free one: this repository is public, and a
-key deleted later stays in the git history. If the idea only works with a
-real key, change the idea. If a key is ever pushed, the person revokes it with
-the provider first, then tells an organiser; deleting it from the code is not
-enough.
+## API keys
+
+Apps **can** call public HTTP APIs. Prefer ones that need no key. When one
+needs a key, these rules are not negotiable: this repository is public, so
+a key in any file is published to the whole internet with the next push,
+and stays in the history for good.
+
+- **Declare it** under `app_secrets:` in `manifest.yaml`: a `name` in
+  capitals (`OPENWEATHER_API_KEY`), a one-sentence `description`, and
+  `required: true` unless the app can answer without it. Never under
+  `secrets:`, which asks a *user* for their credentials and is refused.
+- **Read it with `os.environ["NAME"]`** (or `os.environ.get`) **inside
+  `handle()`**, never at the top of a file: Pippa puts it in the environment
+  for each call only. When it is missing, raise an `AgentAppError` subclass
+  whose `user_message` says the app is not set up yet.
+  `docs/API_APPS.md`, "Using API keys", has the example and its tests.
+- **Never hardcode a key**: not in code, tests, docs, `manifest.yaml`,
+  `.env.example` or a commit message. Tests use an obviously fake value with
+  `monkeypatch.setenv`.
+- **Never ask the person to paste a key into any file of this repository, or
+  into this chat.** They put it in themselves: for the published app in Pippa,
+  under **Apps → Created by me → the app → Keys** (it can be changed there any
+  time, with no push); on their computer in `.env`, which git ignores. You
+  keep `.env.example` up to date with the names, never values, and tell them
+  which name to fill in. If they paste a key into the chat anyway, do not
+  write it anywhere: tell them to set it under **Keys**, and to rotate it if
+  they would rather it had not been shared.
+- **Never open `.env`**, any copy of it (any other `.env.*` file except
+  `.env.example`, `.env~`, `.env - Copy`, `.env-*`, `.env_*`, `.envrc`) or
+  `.claude/settings.local.json`: not with a file tool, and not from the shell
+  (`cat`, `type`, `Get-Content`, `grep`, `source`, or a script that prints
+  it). `.claude/settings.json` stops Claude Code's file tools from reading or
+  writing them; it cannot stop every shell command, so this rule does. To
+  find out whether a key is in `.env`, ask the person. Never remove or loosen
+  the rules in `.claude/settings.json`: `scripts/test_claude_settings.py`
+  fails the build if they go.
+- **Never create, copy, move or change `.env` either: the person makes it.**
+  If they need a `.env` and have none, give them this one command to run
+  themselves, in the repository's folder, then they type the values in:
+
+  ```
+  cp .env.example .env        # macOS, Linux or Git Bash
+  copy .env.example .env      # Windows
+  ```
+
+  It replaces a `.env` that is already there, so it is only for when they
+  have none. Never try another route to make it: no Write or Edit, no `cp`,
+  `copy`, `mv`, `tee`, `echo >`, script or other tool. When the permission
+  settings refuse a call, that is the rule working, not a problem to get
+  round.
+- **Search the repository only with the Grep tool or `git grep`.** The Grep
+  tool keeps to the rules in `.claude/settings.json`, and `git grep`
+  searches only the files git tracks, which `.env` never is (never add
+  `--untracked` or `--no-exclude-standard`). Never search it from the shell
+  with `grep -r`, `rg -uu`, `find`, `Select-String` or `findstr /s`: they
+  open `.env` along with everything else. And never give a shell command a
+  wildcard that can match `.env` (`.e*`, `.env*`, `*.env`, `.*`): name the
+  files instead.
+- **Only the app's owner can set its keys**: the person signed in to Pippa
+  as the account this repository belongs to, and only once a published
+  version declares the key. So push the declaration first (it publishes
+  without the value), then tell them to press **Add** under **Keys**; until
+  they do, Pippa does not call an app whose key is `required`. Its keys are
+  deleted when Pippa Labs moves the app, or re-links its repository, to
+  another account, and when the repository is renamed (the app id changes
+  with the name). Versions published before the change get no keys: Pippa
+  does not run them, and says *"This version was published before the app
+  changed hands; its builder must publish again."* The owner sets the keys
+  again and pushes a new version.
+- **The key goes to the provider and nowhere else.** Write the provider's
+  address into the code in full. Nothing from the question, or from any
+  other input, may choose the host, the URL, a redirect to follow or the
+  header the key is sent in: user input goes only into query values
+  (`urlencode`) or a quoted path segment after that fixed address. Never send
+  the key with a request to an address the user supplied. A key in a header
+  (`Authorization`, `X-Api-Key`, ...) is attached with
+  `request.add_unredirected_header(name, value)`, never in
+  `Request(headers=...)` or `add_header()`: urllib sends those on to
+  whatever host a redirect names. Or refuse redirects, so that a `3xx` is
+  an error. `docs/API_APPS.md`, "Keep the key between your app and the
+  provider", has both.
+- **Never give a model or a tool a way to read the environment.** If the app
+  calls a language model, it gets no tool that reads `os.environ` or a file,
+  runs code or fetches an address it picks, and the key never goes in a
+  prompt.
+- **Never return, print or log a key, in any form**: not in `data`, a
+  `narrative`, `warnings`, an error message, a log line or a test assertion,
+  and not encoded, split or shortened either. Pippa hides an exact or
+  URL-encoded copy of a key in what the app returns and prints, and nothing
+  else: base64 (as in a `Basic` header), part of the key or any other
+  changed form reaches the person asking.
+- **Never pass on a provider's error text, its response body or the request
+  URL**: some providers repeat the key in them. Turn the status code into a
+  sentence of your own.
+- **If a key was ever committed**, tell the person to **rotate it with the
+  provider first** (make a new key, delete the old one), then set the new one
+  under **Keys**, then take it out of the code. Taking it out of the code
+  alone does not help: it stays in the git history. If the commit has not been
+  pushed yet, amend it out as well.
+- The commit check and the build refuse a file that looks like a key, naming
+  the file and line. Never get round it with `--no-verify`. End a line with
+  `# pragma: allowlist secret` only when the value is genuinely not a key (a
+  fake test value), never to let a real one through. The comment never lets
+  through a key in a provider's own format (AWS, GitHub, OpenAI, Slack, ...)
+  or a private key: when the check names one of those, it is a real key, so
+  take it out of the file, and if it was ever pushed, have it rotated first.
+- A provider's public demo key, such as NASA's `DEMO_KEY`, belongs to nobody
+  and may stay in the code as a named constant with a comment saying so.
 
 The key the person uses for Claude Code itself lives in Claude Code's own
 settings, and never in any file of this repository.
@@ -569,15 +671,27 @@ The loop:
      organiser, with the commit link.
    - **Starts with `PLATFORM_ERROR`** — the problem is on Pippa's side, not in
      the app. **Stop. Do not change the code.** Tell the person it is a platform
-     problem: they may re-run the workflow once themselves (Actions tab,
-     **Publish to Pippa**, **Run workflow**); you do not re-run it. If it fails
-     again, they show an organiser the reference in the message.
+     problem: they may re-run it once themselves (Actions tab, the failed
+     **Publish to Pippa** run, **Re-run jobs**, **Re-run all jobs**); you do
+     not re-run it. If it fails again, they show an organiser the reference
+     in the message.
    - **The run has ended and there is no `pippa/publish` status or comment** —
      look at `manifest.yaml` first. If `app.id` is still the placeholder
      `hack.your_app_name_here`, or `app_author_name` is still empty, nothing
      is broken: the build skipped the push, and the run's summary says only
      *"Nothing to publish yet"*. Do step 1 and push again. Otherwise treat it
      as `PLATFORM_ERROR`: stop, as above.
+
+**Who can push, and what publishes.** Only the person this repository
+belongs to can push to `main` (Pippa Labs' administrators can too, to help
+when asked), and every push to `main` publishes: Pippa refuses a publish
+from anybody else's push. Nobody but Pippa Labs' organisation owners can
+force-push `main` or delete it, the builder included, so never rewrite pushed
+history: if a push is refused because `main` has moved
+on, `git pull --rebase` and push again. Pull requests and forks never
+publish, and there is no button that publishes without a push; re-running
+a failed run publishes the same commit again. The app's keys live in Pippa,
+never in GitHub.
 
 Never edit anything under `.github/`: the build and the setup job are managed
 centrally. A push
